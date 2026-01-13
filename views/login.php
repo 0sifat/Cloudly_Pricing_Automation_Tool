@@ -41,7 +41,7 @@
     <div class="auth-container">
         <div class="auth-box">
             <div class="auth-header">
-                <h1>Cloudly AWS Ask</h1>
+                <h1>Cloudly AWS Ask - Hello</h1>
                 <h2>Login</h2>
             </div>
             
