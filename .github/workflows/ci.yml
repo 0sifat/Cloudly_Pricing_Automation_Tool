@@ -1,62 +1,37 @@
-name: Deploy PrintManzil Frontend
+name: CI / Deploy Cloudly Pricing Tool
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
   deploy:
+    name: Build & Deploy on Self-Hosted Runner
     runs-on: self-hosted
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
-      - name: Set deployment directory
-        run: echo "DEPLOY_DIR=/home/ubuntu/actions-runner" >> $GITHUB_ENV
-      
-      - name: Copy files to deployment directory
+
+      - name: Show Docker versions
         run: |
-          set -e
-          echo "Copying latest code to deployment directory..."
-          # Copy all files except .git directory
-          rsync -av --delete \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='.env.local' \
-            --exclude='.env' \
-            ./ ${{ env.DEPLOY_DIR }}/
-          echo "Files copied successfully"
-      
-      - name: Build and deploy with Docker Compose
+          docker --version
+          docker compose version
+
+      - name: Stop existing containers (if any)
         run: |
-          set -e
-          cd ${{ env.DEPLOY_DIR }}
-          echo "Building and starting containers..."
+          docker compose down || true
+
+      - name: Build and start containers
+        run: |
           docker compose up -d --build
-      
-      - name: Clean up Docker resources
+
+      - name: Verify running containers
         run: |
-          echo "Cleaning up unused Docker images..."
-          docker image prune -f || true
-      
-      - name: Verify deployment
+          docker ps
+
+      - name: Application health check
         run: |
-          cd ${{ env.DEPLOY_DIR }}
-          echo "Checking container status..."
-          docker compose ps
-      
-      - name: Deployment summary
-        if: success()
-        run: |
-          echo "✅ Deployment completed successfully!"
-          echo "Timestamp: $(date)"
-      
-      - name: Deployment failed
-        if: failure()
-        run: |
-          echo "❌ Deployment failed!"
-          echo "Please check the logs above for errors."
-          exit 1
+          sleep 15
+          curl -I http://localhost:8078 || exit 1
