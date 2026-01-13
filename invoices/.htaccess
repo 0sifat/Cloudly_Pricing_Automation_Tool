@@ -1,0 +1,11 @@
+# Allow access to invoice files
+Options +Indexes
+<FilesMatch "\.(html|pdf)$">
+    Order allow,deny
+    Allow from all
+</FilesMatch>
+
+
+
+
+

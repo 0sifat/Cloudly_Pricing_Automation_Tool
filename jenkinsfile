@@ -1,0 +1,539 @@
+// Helper Functions
+def currentVersion(filename) {
+    return sh(
+        script: "cat ${filename} | grep '\"version\"' | head -1 | cut -d':' -f2 | cut -d',' -f1 | cut -d'\"' -f2",
+        returnStdout: true
+    ).trim()
+}
+
+def increaseBuildNumber() {
+    def json_file = readJSON file: 'build_version.json'
+    def value = json_file.version
+    def parts = value.split('\\.')
+    def buildParts = parts[2].split('-')
+    
+    if (buildParts.size() > 1) {
+        // Format: major.minor.patch-stage.build
+        def stageBuild = buildParts[1].split('\\.')
+        def stage = stageBuild[0]
+        def buildNum = stageBuild.size() > 1 ? stageBuild[1] as int : 0
+        def nextBuildNum = buildNum + 1
+        
+        value = "${parts[0]}.${parts[1]}.${buildParts[0]}-${stage}.${nextBuildNum}"
+    } else {
+        // Format: major.minor.build
+        def buildNum = parts[2] as int
+        def nextBuildNum = buildNum + 1
+        value = "${parts[0]}.${parts[1]}.${nextBuildNum}"
+    }
+    
+    json_file.version = value
+    json_file.lastBuildDate = new Date().format('yyyy-MM-dd HH:mm:ss')
+    json_file.buildBy = "${env.BUILD_USER_ID ?: 'jenkins'}"
+    
+    writeJSON(file: 'build_version.json', json: json_file, pretty: 4)
+    
+    return value
+}
+
+def nextVersion(String currentVersion, String branchFrom, String branchTo) {
+    def parts = currentVersion.tokenize('.')
+    def major = parts[0]
+    def minor = parts[1]
+    def patchInfo = parts[2]
+    
+    // Check if patch has stage info (e.g., "0-dev")
+    def patchParts = patchInfo.tokenize('-')
+    def patch = patchParts[0]
+    def stage = patchParts.size() > 1 ? patchParts[1] : 'release'
+    
+    def buildNum = parts.size() > 3 ? parts[3] : '0'
+    
+    println "Current Version: ${currentVersion}"
+    println "Major: ${major}, Minor: ${minor}, Patch: ${patch}, Stage: ${stage}, Build: ${buildNum}"
+    
+    // Same branch - increment build number
+    if (branchFrom == branchTo) {
+        def nextBuild = (buildNum as Integer) + 1
+        return "${major}.${minor}.${patch}-${stage}.${nextBuild}"
+    }
+    // Development to release
+    else if (branchFrom == 'development' && branchTo == 'release') {
+        def nextMinor = (minor as Integer) + 1
+        return "${major}.${nextMinor}.0-rc.0"
+    }
+    // Release to master
+    else if (branchFrom == 'release' && branchTo == 'main') {
+        return "${major}.${minor}.0-release.0"
+    }
+    // Development to main (direct deployment)
+    else if (branchFrom == 'development' && branchTo == 'main') {
+        def nextMinor = (minor as Integer) + 1
+        return "${major}.${nextMinor}.0-release.0"
+    }
+    
+    // Default: increment build
+    def nextBuild = (buildNum as Integer) + 1
+    return "${major}.${minor}.${patch}-${stage}.${nextBuild}"
+}
+
+def gitClone(repository, branchName) {
+    git branch: "${branchName}", 
+        credentialsId: 'git-credentials-id', 
+        url: "${repository}"
+}
+
+def sendSlackNotification(message, color = 'good') {
+    // Replace with your Slack webhook or notification method
+    echo "Notification: ${message}"
+    // slackSend(color: color, message: message, channel: '#aws-costing-calculator')
+}
+
+// Main Pipeline
+pipeline {
+    agent any
+    
+    environment {
+        // Docker Configuration
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_IMAGE_NAME = 'your-dockerhub-username/aws-costing-calculator'
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'
+        
+        // Git Configuration
+        GIT_REPO = 'your-git-repository-url'
+        GIT_CREDENTIALS_ID = 'git-credentials-id'
+        
+        // Ansible Configuration
+        ANSIBLE_PATH = 'ansible'
+        ANSIBLE_INVENTORY = "${ANSIBLE_PATH}/inventory"
+        ANSIBLE_PLAYBOOK = "${ANSIBLE_PATH}/deploy.yml"
+        
+        // Notification
+        NOTIFICATION_URL = 'your-slack-webhook-or-notification-url'
+        
+        // Build Info
+        BUILD_TIMESTAMP = sh(returnStdout: true, script: 'date +%Y%m%d_%H%M%S').trim()
+    }
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['development', 'staging', 'production'],
+            description: 'Select deployment environment'
+        )
+        choice(
+            name: 'BRANCH',
+            choices: ['development', 'main', 'release'],
+            description: 'Select branch to deploy'
+        )
+        booleanParam(
+            name: 'RUN_TESTS',
+            defaultValue: true,
+            description: 'Run tests before deployment'
+        )
+        booleanParam(
+            name: 'SKIP_BUILD',
+            defaultValue: false,
+            description: 'Skip Docker build (use existing image)'
+        )
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "AWS Costing Calculator - CI/CD Pipeline"
+                    echo "=========================================="
+                    echo "Environment: ${params.ENVIRONMENT}"
+                    echo "Branch: ${params.BRANCH}"
+                    echo "Build Number: ${env.BUILD_NUMBER}"
+                    echo "Build Timestamp: ${BUILD_TIMESTAMP}"
+                    echo "=========================================="
+                    
+                    sendSlackNotification(
+                        "🚀 Pipeline Started - Build #${env.BUILD_NUMBER}\nEnvironment: ${params.ENVIRONMENT}\nBranch: ${params.BRANCH}",
+                        'warning'
+                    )
+                }
+            }
+        }
+        
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo "Checking out code from ${params.BRANCH} branch..."
+                    gitClone("${GIT_REPO}", "${params.BRANCH}")
+                    
+                    // Get current commit info
+                    env.GIT_COMMIT_SHORT = sh(
+                        returnStdout: true,
+                        script: 'git rev-parse --short HEAD'
+                    ).trim()
+                    
+                    echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
+                }
+            }
+        }
+        
+        stage('Version Management') {
+            steps {
+                script {
+                    echo "Managing application version..."
+                    
+                    VERSION = currentVersion('build_version.json')
+                    NEXT_VERSION = nextVersion(VERSION, params.BRANCH, params.BRANCH)
+                    
+                    echo "Current Version: ${VERSION}"
+                    echo "Next Version: ${NEXT_VERSION}"
+                    
+                    env.APP_VERSION = NEXT_VERSION
+                    env.DOCKER_TAG = "${NEXT_VERSION}"
+                }
+            }
+        }
+        
+        stage('Environment Setup') {
+            steps {
+                script {
+                    echo "Setting up environment variables..."
+                    
+                    // Create .env file for build
+                    sh """
+                        cat > .env << EOF
+DB_ROOT_PASSWORD=\${DB_ROOT_PASSWORD_${params.ENVIRONMENT}}
+DB_DATABASE=aws_costing
+DB_USER=app_user
+DB_PASSWORD=\${DB_PASSWORD_${params.ENVIRONMENT}}
+DB_HOST=db
+DB_PORT=3306
+APP_ENV=${params.ENVIRONMENT}
+APP_DEBUG=false
+BUILD_VERSION=${NEXT_VERSION}
+BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+EOF
+                    """
+                }
+            }
+        }
+        
+        stage('Code Quality Check') {
+            when {
+                expression { params.RUN_TESTS == true }
+            }
+            steps {
+                script {
+                    echo "Running code quality checks..."
+                    
+                    // PHP Syntax Check
+                    sh '''
+                        find . -name "*.php" -not -path "./vendor/*" -print0 | \
+                        xargs -0 -n1 php -l || exit 1
+                    '''
+                    
+                    echo "✓ PHP syntax check passed"
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            when {
+                expression { params.RUN_TESTS == true }
+            }
+            steps {
+                script {
+                    echo "Running security scan..."
+                    
+                    // Trivy filesystem scan
+                    sh '''
+                        trivy fs --severity HIGH,CRITICAL \
+                        --format template \
+                        --template "@/usr/share/trivy/contrib/html.tpl" \
+                        -o trivy-fs-report.html . || true
+                    '''
+                    
+                    echo "✓ Security scan completed"
+                }
+            }
+        }
+        
+        stage('Build Docker Images') {
+            when {
+                expression { params.SKIP_BUILD == false }
+            }
+            steps {
+                script {
+                    echo "Building Docker images..."
+                    
+                    sh """
+                        docker-compose build --no-cache
+                        
+                        # Tag images with version
+                        docker tag cloudly_pricing_automation_tool-php:latest \
+                            ${DOCKER_IMAGE_NAME}-php:${DOCKER_TAG}
+                        docker tag cloudly_pricing_automation_tool-nginx:latest \
+                            ${DOCKER_IMAGE_NAME}-nginx:${DOCKER_TAG}
+                        
+                        # Tag as latest for this environment
+                        docker tag ${DOCKER_IMAGE_NAME}-php:${DOCKER_TAG} \
+                            ${DOCKER_IMAGE_NAME}-php:${params.ENVIRONMENT}-latest
+                        docker tag ${DOCKER_IMAGE_NAME}-nginx:${DOCKER_TAG} \
+                            ${DOCKER_IMAGE_NAME}-nginx:${params.ENVIRONMENT}-latest
+                    """
+                    
+                    echo "✓ Docker images built successfully"
+                }
+            }
+        }
+        
+        stage('Test Docker Images') {
+            when {
+                expression { params.RUN_TESTS == true && params.SKIP_BUILD == false }
+            }
+            steps {
+                script {
+                    echo "Testing Docker images..."
+                    
+                    // Start containers for testing
+                    sh '''
+                        docker-compose up -d
+                        sleep 15
+                        
+                        # Test PHP
+                        docker exec aws_costing_php php -v
+                        
+                        # Test database connection
+                        docker exec aws_costing_php php -r "
+                            \\$conn = new mysqli('db', 'app_user', 'app_password', 'aws_costing');
+                            if (\\$conn->connect_error) { exit(1); }
+                            echo 'DB connected';
+                            \\$conn->close();
+                        "
+                        
+                        # Test web server
+                        curl -f http://localhost:80 || exit 1
+                        
+                        # Stop test containers
+                        docker-compose down
+                    '''
+                    
+                    echo "✓ Docker image tests passed"
+                }
+            }
+        }
+        
+        stage('Image Security Scan') {
+            when {
+                expression { params.RUN_TESTS == true && params.SKIP_BUILD == false }
+            }
+            steps {
+                script {
+                    echo "Scanning Docker images..."
+                    
+                    sh """
+                        trivy image --severity HIGH,CRITICAL \
+                        --format template \
+                        --template "@/usr/share/trivy/contrib/html.tpl" \
+                        -o trivy-image-report.html \
+                        ${DOCKER_IMAGE_NAME}-php:${DOCKER_TAG} || true
+                    """
+                    
+                    echo "✓ Image scan completed"
+                }
+            }
+        }
+        
+        stage('Push Docker Images') {
+            when {
+                expression { params.SKIP_BUILD == false }
+            }
+            steps {
+                script {
+                    echo "Pushing Docker images to registry..."
+                    
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", "${DOCKER_CREDENTIALS_ID}") {
+                        sh """
+                            docker push ${DOCKER_IMAGE_NAME}-php:${DOCKER_TAG}
+                            docker push ${DOCKER_IMAGE_NAME}-nginx:${DOCKER_TAG}
+                            docker push ${DOCKER_IMAGE_NAME}-php:${params.ENVIRONMENT}-latest
+                            docker push ${DOCKER_IMAGE_NAME}-nginx:${params.ENVIRONMENT}-latest
+                        """
+                    }
+                    
+                    echo "✓ Images pushed successfully"
+                    
+                    sendSlackNotification(
+                        "📦 Docker Images Built & Pushed\nVersion: ${DOCKER_TAG}\nEnvironment: ${params.ENVIRONMENT}",
+                        'good'
+                    )
+                }
+            }
+        }
+        
+        stage('Update Version File') {
+            steps {
+                script {
+                    echo "Updating version file..."
+                    
+                    BUILD_NUMBER = increaseBuildNumber()
+                    
+                    sh '''
+                        git config user.email "jenkins@yourdomain.com"
+                        git config user.name "Jenkins CI"
+                        git add build_version.json
+                        git commit -m "Jenkins Build #${BUILD_NUMBER} - Version: v${APP_VERSION}"
+                        git push origin HEAD:${BRANCH}
+                    '''
+                    
+                    echo "✓ Version file updated"
+                }
+            }
+        }
+        
+        stage('Prepare Ansible Deployment') {
+            steps {
+                script {
+                    echo "Preparing Ansible deployment..."
+                    
+                    // Update Ansible variables with new image tags
+                    sh """
+                        sed -i 's|^php_image:.*|php_image: ${DOCKER_IMAGE_NAME}-php:${DOCKER_TAG}|' \
+                            ${ANSIBLE_PATH}/group_vars/${params.ENVIRONMENT}.yml
+                        sed -i 's|^nginx_image:.*|nginx_image: ${DOCKER_IMAGE_NAME}-nginx:${DOCKER_TAG}|' \
+                            ${ANSIBLE_PATH}/group_vars/${params.ENVIRONMENT}.yml
+                        sed -i 's|^app_version:.*|app_version: ${DOCKER_TAG}|' \
+                            ${ANSIBLE_PATH}/group_vars/${params.ENVIRONMENT}.yml
+                    """
+                    
+                    echo "✓ Ansible variables updated"
+                }
+            }
+        }
+        
+        stage('Deploy with Ansible') {
+            steps {
+                script {
+                    echo "Deploying to ${params.ENVIRONMENT} environment..."
+                    
+                    ansiblePlaybook(
+                        playbook: "${ANSIBLE_PLAYBOOK}",
+                        inventory: "${ANSIBLE_INVENTORY}/${params.ENVIRONMENT}",
+                        extras: "-e 'app_version=${DOCKER_TAG} environment=${params.ENVIRONMENT}'",
+                        colorized: true,
+                        credentialsId: 'ansible-ssh-key'
+                    )
+                    
+                    echo "✓ Deployment completed"
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                script {
+                    echo "Performing health checks..."
+                    
+                    sleep 20
+                    
+                    // Get deployment URL based on environment
+                    def deployUrl = params.ENVIRONMENT == 'production' ? 
+                        'http://cloudly.sadiqdevops.click:8078' : 
+                        'http://13.233.162.243:8078'
+                    
+                    sh """
+                        curl -f ${deployUrl} || exit 1
+                    """
+                    
+                    echo "✓ Health check passed"
+                }
+            }
+        }
+        
+        stage('Generate Reports') {
+            steps {
+                script {
+                    echo "Generating deployment reports..."
+                    
+                    // Combine all reports
+                    sh '''
+                        if [ -f trivy-fs-report.html ]; then
+                            cat trivy-fs-report.html > final-report.html
+                        fi
+                        if [ -f trivy-image-report.html ]; then
+                            cat trivy-image-report.html >> final-report.html
+                        fi
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "Cleaning up workspace..."
+                
+                // Archive reports
+                archiveArtifacts artifacts: '*-report.html', allowEmptyArchive: true
+                
+                // Publish HTML reports
+                publishHTML(target: [
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: '',
+                    reportFiles: 'final-report.html',
+                    reportName: "Security & Quality Report"
+                ])
+            }
+        }
+        
+        success {
+            script {
+                sendSlackNotification(
+                    "✅ Deployment Successful!\n" +
+                    "Environment: ${params.ENVIRONMENT}\n" +
+                    "Version: ${env.APP_VERSION}\n" +
+                    "Branch: ${params.BRANCH}\n" +
+                    "Build: #${env.BUILD_NUMBER}",
+                    'good'
+                )
+                
+                echo "=========================================="
+                echo "✓ Pipeline Completed Successfully"
+                echo "Version: ${env.APP_VERSION}"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "=========================================="
+            }
+        }
+        
+        failure {
+            script {
+                sendSlackNotification(
+                    "❌ Deployment Failed!\n" +
+                    "Environment: ${params.ENVIRONMENT}\n" +
+                    "Branch: ${params.BRANCH}\n" +
+                    "Build: #${env.BUILD_NUMBER}\n" +
+                    "Check console: ${env.BUILD_URL}console",
+                    'danger'
+                )
+                
+                echo "=========================================="
+                echo "✗ Pipeline Failed"
+                echo "Check logs for details"
+                echo "=========================================="
+            }
+        }
+        
+        unstable {
+            script {
+                sendSlackNotification(
+                    "⚠️ Build Unstable\n" +
+                    "Environment: ${params.ENVIRONMENT}\n" +
+                    "Build: #${env.BUILD_NUMBER}",
+                    'warning'
+                )
+            }
+        }
+    }
+}

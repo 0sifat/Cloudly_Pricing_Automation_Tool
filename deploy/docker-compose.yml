@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Database Service
+  database:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.database
+    container_name: aws-cloudly-db
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: aws_calc
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
+    ports:
+      - "3307:3307"
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - aws-cloudly-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend Service (PHP + Nginx)
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: aws-cloudly-backend
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DB_HOST: database
+      DB_NAME: aws_calc
+      DB_USER: app_user
+      DB_PASS: app_password
+      DB_PORT: 3307
+    ports:
+      - "9096:80"
+    volumes:
+      - ../:/var/www/html
+      - ./nginx-backend.conf:/etc/nginx/sites-available/default
+    networks:
+      - aws-cloudly-network
+    restart: unless-stopped
+
+  # Frontend Service (Static Assets)
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    container_name: aws-cloudly-frontend
+    depends_on:
+      - backend
+    ports:
+      - "9095:80"
+    volumes:
+      - ../assets:/usr/share/nginx/html/assets
+    networks:
+      - aws-cloudly-network
+    restart: unless-stopped
+
+volumes:
+  db_data:
+
+networks:
+  aws-cloudly-network:
+    driver: bridge
+

@@ -1,0 +1,162 @@
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Cost Estimate & Invoice - Cloudly AWS Ask</title>
+            <style>
+                @media print {
+                    @page { margin: 1cm; size: A4; }
+                    body { padding: 0; margin: 0; }
+                    .no-print { display: none !important; }
+                }
+                body { font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; margin: 0; background: white; }
+                .header { text-align: center; margin-bottom: 30px; border-bottom: 3px solid #ff6b35; padding-bottom: 20px; }
+                .header-logo { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 10px; }
+                .header-logo img { height: 50px; }
+                .header h1 { color: #ff6b35; font-size: 28px; margin: 0; font-weight: 600; }
+                .header h2 { color: #666; font-size: 16px; margin: 5px 0; font-weight: 400; }
+                .info-section { display: table; width: 100%; margin-bottom: 30px; }
+                .info-box { display: table-cell; width: 50%; padding: 15px; background: linear-gradient(135deg, #fff5f2 0%, #ffe8e0 100%); vertical-align: top; border-radius: 5px; margin: 5px; }
+                .info-box h3 { color: #333; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+                .info-box p { color: #666; margin: 5px 0; font-size: 12px; }
+                .service-section { margin-bottom: 25px; page-break-inside: avoid; }
+                .service-section h3 { background: linear-gradient(135deg, #ff6b35 0%, #ff4757 100%); color: white; padding: 10px 15px; margin: 0; font-size: 14px; font-weight: 600; border-radius: 5px 5px 0 0; }
+                .service-table { width: 100%; border-collapse: collapse; border: 1px solid #ddd; font-size: 11px; }
+                .service-table th { background: #fff5f2; padding: 10px; text-align: left; border-bottom: 2px solid #ff6b35; font-weight: 600; }
+                .service-table td { padding: 10px; border-bottom: 1px solid #eee; }
+                .service-table tr:last-child td { border-bottom: none; }
+                .service-table tr:hover { background: #fff5f2; }
+                .total-section { margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #fff5f2 0%, #ffe8e0 100%); border-radius: 5px; border: 2px solid #ff6b35; }
+                .total-section h3 { color: #333; margin-bottom: 15px; font-size: 18px; font-weight: 600; }
+                .total-row { display: table; width: 100%; padding: 10px 0; border-bottom: 1px solid #ddd; }
+                .total-row span { display: table-cell; }
+                .total-row span:last-child { text-align: right; font-weight: bold; }
+                .total-row:last-child { border-bottom: none; font-size: 20px; color: #ff6b35; font-weight: 700; }
+                .footer { margin-top: 30px; text-align: center; color: #666; font-size: 10px; border-top: 1px solid #ddd; padding-top: 15px; }
+                @media print {
+                    body { padding: 10px; }
+                    .service-section { page-break-inside: avoid; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="header-logo">
+                    <img src="data:image/jpeg;base64,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" alt="Cloudly Logo" style="height: 50px;">                    <h1>Cloudly AWS Ask</h1>
+                </div>
+                <h2>Cost Estimate & Invoice</h2>
+            </div>
+
+            <div class="info-section">
+                <div class="info-box">
+                    <h3>Project Information</h3>
+                    <p><strong>Project Name:</strong> Samsung</p>
+                    <p><strong>Salesman Name:</strong> alam_bha</p>
+                    <p><strong>Region:</strong> Asia Pacific (Mumbai)</p>
+                    <p><strong>Report Date:</strong> 2025-12-19 20:54:41</p>
+                </div>
+                <div class="info-box">
+                    <h3>Contact Information</h3>
+                    <p><strong>User:</strong> roy</p>
+                </div>
+            </div>
+
+                        <div class="service-section">
+                <h3>EC2 Instances</h3>
+                <table class="service-table">
+                    <thead>
+                        <tr>
+                            <th>Instance Type</th>
+                            <th>Quantity</th>
+                            <th>OS</th>
+                            <th>Region</th>
+                            <th>Total Estimated Monthly Cost (USD)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                                                <tr>
+                            <td>t3.micro</td>
+                            <td>1</td>
+                            <td>Linux</td>
+                            <td>US East (N. Virginia)</td>
+                            <td>$1,715.50</td>
+                        </tr>
+                                                <tr style="background: #f0f0f0; font-weight: bold;">
+                            <td colspan="4">EC2 Subtotal</td>
+                            <td>$1,715.50</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            
+                        <div class="service-section">
+                <h3>VPC</h3>
+                <table class="service-table">
+                    <thead>
+                        <tr>
+                            <th>Service</th>
+                            <th>Count</th>
+                            <th>Region</th>
+                            <th>Total Estimated Monthly Cost (USD)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>VPC</td>
+                            <td>1</td>
+                            <td>US East (N. Virginia)</td>
+                            <td>$0.00</td>
+                        </tr>
+                                                <tr>
+                            <td>NAT Gateway</td>
+                            <td>1</td>
+                            <td>US East (N. Virginia)</td>
+                            <td>$32.85</td>
+                        </tr>
+                                                                        <tr>
+                            <td>VPC Endpoint</td>
+                            <td>1</td>
+                            <td>US East (N. Virginia)</td>
+                            <td>$7.30</td>
+                        </tr>
+                                                <tr style="background: #f0f0f0; font-weight: bold;">
+                            <td colspan="3">VPC Subtotal</td>
+                            <td>$40.16</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            
+            
+            
+            
+            
+            
+            
+            <div class="total-section">
+                <h3>Total Estimated Cost</h3>
+                <div class="total-row" style="font-size: 20px; font-weight: 700; color: #ff6b35;">
+                    <span>Total Estimated Monthly Cost (USD):</span>
+                    <span>$1,755.66</span>
+                </div>
+            </div>
+
+            <div class="footer">
+                <p>This is an estimate. Actual costs may vary.</p>
+                <p>&copy; 2025 Cloudly. All rights reserved.</p>
+                <p>Generated on: 2025-12-19 20:54:41</p>
+            </div>
+        
+        <script>
+            window.onload = function() {
+                // Auto-trigger print dialog immediately
+                setTimeout(function() {
+                    window.print();
+                }, 500);
+            };
+        </script>
+        </body>
+        </html>
+        
