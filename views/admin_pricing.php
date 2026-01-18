@@ -55,10 +55,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         case 'rds_instance':
             $vcpu = intval($_POST['vcpu'] ?? 0);
             $memory_gb = floatval($_POST['memory_gb'] ?? 0);
-            $result = $pricingModel->setRDSInstancePrice($_POST['instance_type'], $_POST['engine'], $region, $_POST['price'], $vcpu, $memory_gb);
+            $result = $pricingModel->setRDSInstancePrice($_POST['instance_type'], $_POST['engine'], $region, $_POST['price'], $vcpu, $memory_gb, $_POST['deployment_type'] ?? 'single_az');
             break;
         case 'rds_storage':
-            $result = $pricingModel->setRDSStoragePrice($_POST['storage_type'], $region, $_POST['price_per_gb'], $_POST['iops_price'] ?? 0);
+            $result = $pricingModel->setRDSStoragePrice($_POST['storage_type'], $region, $_POST['price_per_gb']);
             break;
         case 'vpc':
             $result = $pricingModel->setVPCPrice($_POST['service_name'], $region, $_POST['price_per_hour'] ?? 0, $_POST['price_per_gb'] ?? 0, $_POST['unit'] ?? 'hour');
@@ -81,8 +81,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     if ($result) {
-        // Redirect to preserve region and show success message
-        $redirect_url = "?service=" . urlencode($service_type) . "&region=" . urlencode($region);
+        // Redirect to preserve region and show success message; rds_instance and rds_storage both use RDS tab
+        $svc = in_array($service_type, ['rds_instance', 'rds_storage']) ? 'rds' : $service_type;
+        $redirect_url = "?service=" . urlencode($svc) . "&region=" . urlencode($region);
         if (!empty($region)) {
             header("Location: admin_pricing.php" . $redirect_url . "&success=1");
             exit;
@@ -752,6 +753,7 @@ if (!empty($region)) {
                         <tr>
                             <th>Instance Type</th>
                             <th>Engine</th>
+                            <th>Deployment</th>
                             <th>vCPU</th>
                             <th>Memory (GB)</th>
                             <th>Region</th>
@@ -760,23 +762,26 @@ if (!empty($region)) {
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($pricing_data as $price): ?>
+                        <?php foreach ($pricing_data as $price): 
+                            $dep = isset($price['deployment_type']) ? $price['deployment_type'] : 'single_az';
+                        ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($price['instance_type']); ?></td>
                                 <td><?php echo htmlspecialchars($price['engine']); ?></td>
+                                <td><?php echo $dep === 'multi_az' ? 'Multi-AZ' : 'Single AZ'; ?></td>
                                 <td><?php echo htmlspecialchars($price['vcpu'] ?? 0); ?></td>
                                 <td><?php echo htmlspecialchars($price['memory_gb'] ?? 0); ?></td>
                                 <td><?php echo htmlspecialchars($price['region']); ?></td>
                                 <td>$<?php echo number_format($price['on_demand_price_per_hour'], 6); ?></td>
                                 <td>
                                     <button class="btn btn-primary"
-                                        onclick="editRDSInstancePrice('<?php echo htmlspecialchars($price['instance_type']); ?>', '<?php echo htmlspecialchars($price['engine']); ?>', <?php echo $price['on_demand_price_per_hour']; ?>, <?php echo $price['vcpu'] ?? 0; ?>, <?php echo $price['memory_gb'] ?? 0; ?>)">Edit</button>
+                                        onclick="editRDSInstancePrice('<?php echo htmlspecialchars($price['instance_type']); ?>', '<?php echo htmlspecialchars($price['engine']); ?>', <?php echo $price['on_demand_price_per_hour']; ?>, <?php echo $price['vcpu'] ?? 0; ?>, <?php echo $price['memory_gb'] ?? 0; ?>, '<?php echo htmlspecialchars($dep); ?>', '<?php echo htmlspecialchars($region); ?>')">Edit</button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                         <?php if (empty($pricing_data)): ?>
                             <tr>
-                                <td colspan="7" style="text-align: center; color: #999;">No pricing data found for this region. Add prices using the form below.</td>
+                                <td colspan="8" style="text-align: center; color: #999;">No pricing data found for this region. Add prices using the form below.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -789,6 +794,7 @@ if (!empty($region)) {
                     <form method="POST" style="max-width: 500px;">
                         <input type="hidden" name="action" value="update_price">
                         <input type="hidden" name="service_type" value="rds_instance">
+                        <input type="hidden" name="region" value="<?php echo htmlspecialchars($region); ?>">
                         <div class="form-group">
                             <label>Instance Type (Manual Entry):</label>
                             <input type="text" name="instance_type" required placeholder="e.g., db.t3.medium" style="width: 100%; padding: 12px; border: 1px solid rgba(255, 107, 53, 0.3); border-radius: 6px; background: #2a2a2a; color: #fff; font-size: 14px;">
@@ -800,6 +806,13 @@ if (!empty($region)) {
                                 <option value="postgresql">PostgreSQL</option>
                                 <option value="oracle">Oracle</option>
                                 <option value="mariadb">MariaDB</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Deployment:</label>
+                            <select name="deployment_type" required>
+                                <option value="single_az">Single AZ</option>
+                                <option value="multi_az">Multi-AZ</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -819,16 +832,23 @@ if (!empty($region)) {
                 </div>
                 <?php endif; ?>
 
-                <h3 style="color: #fff; margin-top: 40px;">RDS Storage Pricing</h3>
-                <?php
-                $rds_storage_data = [];
-                $stmt = $conn->prepare("SELECT * FROM rds_storage_pricing WHERE region = ? ORDER BY storage_type");
-                $stmt->bind_param("s", $region);
-                $stmt->execute();
-                $result = $stmt->get_result();
-                while ($row = $result->fetch_assoc()) {
-                    $rds_storage_data[] = $row;
-                }
+                <p style="margin-top: 20px;"><a href="#rds-storage-pricing" style="color: #ff6b35; text-decoration: underline;">↓ RDS Storage Pricing (gp2, gp3, io1, io2 — set price per GB/month)</a></p>
+
+                <div id="rds-storage-pricing" style="margin-top: 40px;">
+                <h3 style="color: #fff; margin-top: 20px;">RDS Storage Pricing</h3>
+                <?php if (empty($region)): ?>
+                    <div style="background: rgba(255, 193, 7, 0.2); border: 1px solid #ffc107; color: #ffc107; padding: 15px; border-radius: 8px;">
+                        Please select a region above to view and add RDS storage pricing (gp2, gp3, etc.).
+                    </div>
+                <?php else:
+                    $rds_storage_data = [];
+                    $stmt = $conn->prepare("SELECT * FROM rds_storage_pricing WHERE region = ? ORDER BY storage_type");
+                    $stmt->bind_param("s", $region);
+                    $stmt->execute();
+                    $result = $stmt->get_result();
+                    while ($row = $result->fetch_assoc()) {
+                        $rds_storage_data[] = $row;
+                    }
                 ?>
                 <table class="pricing-table">
                     <thead>
@@ -836,7 +856,6 @@ if (!empty($region)) {
                             <th>Storage Type</th>
                             <th>Region</th>
                             <th>Price per GB/Month</th>
-                            <th>IOPS Price</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -846,10 +865,9 @@ if (!empty($region)) {
                                 <td><?php echo htmlspecialchars($price['storage_type']); ?></td>
                                 <td><?php echo htmlspecialchars($price['region']); ?></td>
                                 <td>$<?php echo number_format($price['price_per_gb_per_month'], 6); ?></td>
-                                <td>$<?php echo number_format($price['iops_price_per_iops'], 6); ?></td>
                                 <td>
                                     <button class="btn btn-primary"
-                                        onclick="editRDSStoragePrice('<?php echo htmlspecialchars($price['storage_type']); ?>', <?php echo $price['price_per_gb_per_month']; ?>, <?php echo $price['iops_price_per_iops']; ?>)">Edit</button>
+                                        onclick="editRDSStoragePrice('<?php echo htmlspecialchars($price['storage_type']); ?>', <?php echo $price['price_per_gb_per_month']; ?>, '<?php echo htmlspecialchars($region); ?>')">Edit</button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -861,8 +879,9 @@ if (!empty($region)) {
                     <form method="POST" style="max-width: 500px;">
                         <input type="hidden" name="action" value="update_price">
                         <input type="hidden" name="service_type" value="rds_storage">
+                        <input type="hidden" name="region" value="<?php echo htmlspecialchars($region); ?>">
                         <div class="form-group">
-                            <label>Storage Type:</label>
+                            <label>Storage Type (gp2, gp3, io1, io2):</label>
                             <select name="storage_type" required>
                                 <option value="gp2">gp2</option>
                                 <option value="gp3">gp3</option>
@@ -872,14 +891,12 @@ if (!empty($region)) {
                         </div>
                         <div class="form-group">
                             <label>Price per GB/Month ($):</label>
-                            <input type="number" name="price_per_gb" step="0.000001" required>
-                        </div>
-                        <div class="form-group">
-                            <label>IOPS Price per IOPS ($):</label>
-                            <input type="number" name="iops_price" step="0.000001" value="0.10">
+                            <input type="number" name="price_per_gb" step="0.000001" required placeholder="e.g. 0.115">
                         </div>
                         <button type="submit" class="btn btn-success">Save Price</button>
                     </form>
+                </div>
+                <?php endif; ?>
                 </div>
             <?php elseif ($service === 'vpc'): ?>
                 <h3 style="color: #fff; margin-top: 20px;">VPC Pricing</h3>
@@ -1342,7 +1359,7 @@ if (!empty($region)) {
             }
         }
 
-        function editRDSInstancePrice(instanceType, engine, currentPrice, vcpu, memoryGb) {
+        function editRDSInstancePrice(instanceType, engine, currentPrice, vcpu, memoryGb, deploymentType, region) {
             var newPrice = prompt('Enter new price per hour for ' + instanceType + ' (' + engine + '):', currentPrice);
             if (newPrice !== null && newPrice !== '') {
                 var newVcpu = prompt('Enter vCPU count:', vcpu);
@@ -1357,7 +1374,9 @@ if (!empty($region)) {
                             '<input type="hidden" name="engine" value="' + engine + '">' +
                             '<input type="hidden" name="price" value="' + newPrice + '">' +
                             '<input type="hidden" name="vcpu" value="' + newVcpu + '">' +
-                            '<input type="hidden" name="memory_gb" value="' + newMemory + '">';
+                            '<input type="hidden" name="memory_gb" value="' + newMemory + '">' +
+                            '<input type="hidden" name="deployment_type" value="' + (deploymentType || 'single_az') + '">' +
+                            '<input type="hidden" name="region" value="' + (region || '') + '">';
                         document.body.appendChild(form);
                         form.submit();
                     }
@@ -1365,7 +1384,7 @@ if (!empty($region)) {
             }
         }
 
-        function editRDSStoragePrice(storageType, pricePerGB, iopsPrice) {
+        function editRDSStoragePrice(storageType, pricePerGB, region) {
             var newPricePerGB = prompt('Enter new price per GB/month:', pricePerGB);
             if (newPricePerGB !== null && newPricePerGB !== '') {
                 var form = document.createElement('form');
@@ -1374,7 +1393,7 @@ if (!empty($region)) {
                     '<input type="hidden" name="service_type" value="rds_storage">' +
                     '<input type="hidden" name="storage_type" value="' + storageType + '">' +
                     '<input type="hidden" name="price_per_gb" value="' + newPricePerGB + '">' +
-                    '<input type="hidden" name="iops_price" value="' + iopsPrice + '">';
+                    '<input type="hidden" name="region" value="' + (region || '') + '">';
                 document.body.appendChild(form);
                 form.submit();
             }

@@ -280,31 +280,39 @@ CREATE TABLE IF NOT EXISTS s3_storage_pricing (
     UNIQUE KEY unique_storage_region (storage_class, region)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- RDS Instance Pricing
+-- RDS Instance Pricing (deployment_type: single_az or multi_az — set on instance, not storage)
 CREATE TABLE IF NOT EXISTS rds_instance_pricing (
     id INT AUTO_INCREMENT PRIMARY KEY,
     instance_type VARCHAR(100) NOT NULL,
     engine VARCHAR(50) NOT NULL,
     region VARCHAR(50) NOT NULL,
+    deployment_type VARCHAR(20) NOT NULL DEFAULT 'single_az',
     vcpu INT DEFAULT 0,
     memory_gb DECIMAL(5, 2) DEFAULT 0.00,
     on_demand_price_per_hour DECIMAL(10, 6) DEFAULT 0.000000,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_rds_instance (instance_type, engine, region)
+    UNIQUE KEY unique_rds_instance (instance_type, engine, region, deployment_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- RDS Storage Pricing
+-- RDS Storage Pricing (price per GB per month; no deployment — storage uses same rate)
 CREATE TABLE IF NOT EXISTS rds_storage_pricing (
     id INT AUTO_INCREMENT PRIMARY KEY,
     storage_type VARCHAR(50) NOT NULL,
     region VARCHAR(50) NOT NULL,
     price_per_gb_per_month DECIMAL(10, 6) DEFAULT 0.000000,
-    iops_price_per_iops DECIMAL(10, 6) DEFAULT 0.000000,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY unique_rds_storage (storage_type, region)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Migration: rds_instance_pricing add deployment_type; rds_storage_pricing remove deployment_type (run if needed)
+-- ALTER TABLE rds_instance_pricing ADD COLUMN deployment_type VARCHAR(20) NOT NULL DEFAULT 'single_az' AFTER region;
+-- ALTER TABLE rds_instance_pricing DROP INDEX unique_rds_instance;
+-- ALTER TABLE rds_instance_pricing ADD UNIQUE KEY unique_rds_instance (instance_type, engine, region, deployment_type);
+-- ALTER TABLE rds_storage_pricing DROP INDEX unique_rds_storage;
+-- ALTER TABLE rds_storage_pricing DROP COLUMN deployment_type;
+-- ALTER TABLE rds_storage_pricing ADD UNIQUE KEY unique_rds_storage (storage_type, region);
 
 -- VPC Pricing
 CREATE TABLE IF NOT EXISTS vpc_pricing (

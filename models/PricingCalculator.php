@@ -56,16 +56,12 @@ class PricingCalculator {
         if (empty($region)) return 0;
         $engine = $config['engine'] ?? 'mysql';
         
-        // Instance pricing
-        $instance_price_per_hour = $this->pricingModel->getRDSInstancePrice($config['instance_type'], $engine, $region);
+        // Instance pricing (Single AZ / Multi-AZ price set per deployment on instance in admin)
+        $instance_price_per_hour = $this->pricingModel->getRDSInstancePrice($config['instance_type'], $engine, $region, !empty($config['multi_az']));
         $instance_cost = $instance_price_per_hour * 730;
         $cost += $instance_cost * $config['quantity'];
         
-        if ($config['multi_az']) {
-            $cost *= 2; // Multi-AZ doubles the cost
-        }
-        
-        // Storage cost
+        // Storage cost (price per GB per month; one rate per storage_type+region, no deployment)
         $storage_price = $this->pricingModel->getRDSStoragePrice($config['storage_type'], $region);
         $cost += $config['storage_gb'] * $storage_price['price_per_gb'];
         

@@ -76,22 +76,24 @@ $rds_prices = [
 ];
 
 foreach ($rds_prices as $rds) {
-    $stmt = $conn->prepare("INSERT INTO rds_instance_pricing (instance_type, engine, region, on_demand_price_per_hour) VALUES (?, ?, 'us-east-1', ?) ON DUPLICATE KEY UPDATE on_demand_price_per_hour = ?");
-    $stmt->bind_param("ssdd", $rds['instance_type'], $rds['engine'], $rds['price'], $rds['price']);
-    $stmt->execute();
-    echo "Set RDS {$rds['instance_type']} ({$rds['engine']}): \${$rds['price']}/hour\n";
+    foreach (['single_az', 'multi_az'] as $deployment_type) {
+        $stmt = $conn->prepare("INSERT INTO rds_instance_pricing (instance_type, engine, region, deployment_type, vcpu, memory_gb, on_demand_price_per_hour) VALUES (?, ?, 'us-east-1', ?, 0, 0, ?) ON DUPLICATE KEY UPDATE on_demand_price_per_hour = ?");
+        $stmt->bind_param("sssdd", $rds['instance_type'], $rds['engine'], $deployment_type, $rds['price'], $rds['price']);
+        $stmt->execute();
+    }
+    echo "Set RDS {$rds['instance_type']} ({$rds['engine']}): \${$rds['price']}/hour (Single AZ & Multi-AZ)\n";
 }
 
-// RDS Storage Prices
+// RDS Storage Prices (per GB/month; no deployment — one rate per storage_type+region)
 $rds_storage = [
-    'gp2' => ['price_per_gb' => 0.115, 'iops_price' => 0],
-    'gp3' => ['price_per_gb' => 0.115, 'iops_price' => 0],
-    'io1' => ['price_per_gb' => 0.125, 'iops_price' => 0.10],
+    'gp2' => ['price_per_gb' => 0.115],
+    'gp3' => ['price_per_gb' => 0.115],
+    'io1' => ['price_per_gb' => 0.125],
 ];
 
 foreach ($rds_storage as $storage_type => $prices) {
-    $stmt = $conn->prepare("INSERT INTO rds_storage_pricing (storage_type, region, price_per_gb_per_month, iops_price_per_iops) VALUES (?, 'us-east-1', ?, ?) ON DUPLICATE KEY UPDATE price_per_gb_per_month = ?, iops_price_per_iops = ?");
-    $stmt->bind_param("sdddd", $storage_type, $prices['price_per_gb'], $prices['iops_price'], $prices['price_per_gb'], $prices['iops_price']);
+    $stmt = $conn->prepare("INSERT INTO rds_storage_pricing (storage_type, region, price_per_gb_per_month) VALUES (?, 'us-east-1', ?) ON DUPLICATE KEY UPDATE price_per_gb_per_month = ?");
+    $stmt->bind_param("sdd", $storage_type, $prices['price_per_gb'], $prices['price_per_gb']);
     $stmt->execute();
     echo "Set RDS Storage $storage_type: \${$prices['price_per_gb']}/GB/month\n";
 }

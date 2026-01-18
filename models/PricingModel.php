@@ -128,22 +128,23 @@ class PricingModel {
         return $stmt->execute();
     }
     
-    // RDS Pricing
-    public function getRDSInstancePrice($instance_type, $engine, $region) {
-        $stmt = $this->conn->prepare("SELECT on_demand_price_per_hour FROM rds_instance_pricing WHERE instance_type = ? AND engine = ? AND region = ?");
-        $stmt->bind_param("sss", $instance_type, $engine, $region);
+    // RDS Pricing (Single AZ / Multi-AZ on instance; storage has one rate per type+region)
+    public function getRDSInstancePrice($instance_type, $engine, $region, $multi_az = false) {
+        $deployment_type = $multi_az ? 'multi_az' : 'single_az';
+        $stmt = $this->conn->prepare("SELECT on_demand_price_per_hour FROM rds_instance_pricing WHERE instance_type = ? AND engine = ? AND region = ? AND deployment_type = ?");
+        $stmt->bind_param("ssss", $instance_type, $engine, $region, $deployment_type);
         $stmt->execute();
         $result = $stmt->get_result();
         if ($row = $result->fetch_assoc()) {
             return floatval($row['on_demand_price_per_hour']);
         }
-        // Return 0 if no price found for this region
         return 0;
     }
     
-    public function getRDSInstanceDetails($instance_type, $engine, $region) {
-        $stmt = $this->conn->prepare("SELECT vcpu, memory_gb, on_demand_price_per_hour FROM rds_instance_pricing WHERE instance_type = ? AND engine = ? AND region = ?");
-        $stmt->bind_param("sss", $instance_type, $engine, $region);
+    public function getRDSInstanceDetails($instance_type, $engine, $region, $multi_az = false) {
+        $deployment_type = $multi_az ? 'multi_az' : 'single_az';
+        $stmt = $this->conn->prepare("SELECT vcpu, memory_gb, on_demand_price_per_hour FROM rds_instance_pricing WHERE instance_type = ? AND engine = ? AND region = ? AND deployment_type = ?");
+        $stmt->bind_param("ssss", $instance_type, $engine, $region, $deployment_type);
         $stmt->execute();
         $result = $stmt->get_result();
         if ($row = $result->fetch_assoc()) {
@@ -157,18 +158,14 @@ class PricingModel {
     }
     
     public function getRDSStoragePrice($storage_type, $region) {
-        $stmt = $this->conn->prepare("SELECT price_per_gb_per_month, iops_price_per_iops FROM rds_storage_pricing WHERE storage_type = ? AND region = ?");
+        $stmt = $this->conn->prepare("SELECT price_per_gb_per_month FROM rds_storage_pricing WHERE storage_type = ? AND region = ?");
         $stmt->bind_param("ss", $storage_type, $region);
         $stmt->execute();
         $result = $stmt->get_result();
         if ($row = $result->fetch_assoc()) {
-            return [
-                'price_per_gb' => floatval($row['price_per_gb_per_month']),
-                'iops_price' => floatval($row['iops_price_per_iops'])
-            ];
+            return ['price_per_gb' => floatval($row['price_per_gb_per_month'])];
         }
-        // Return 0 if no price found for this region
-        return ['price_per_gb' => 0, 'iops_price' => 0];
+        return ['price_per_gb' => 0];
     }
     
     // VPC Pricing
@@ -307,7 +304,7 @@ class PricingModel {
     }
     
     public function getAllRDSPricing($region) {
-        $stmt = $this->conn->prepare("SELECT instance_type, engine, vcpu, memory_gb, region, on_demand_price_per_hour FROM rds_instance_pricing WHERE region = ? ORDER BY instance_type, engine");
+        $stmt = $this->conn->prepare("SELECT instance_type, engine, deployment_type, vcpu, memory_gb, region, on_demand_price_per_hour FROM rds_instance_pricing WHERE region = ? ORDER BY instance_type, engine, deployment_type");
         $stmt->bind_param("s", $region);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -316,6 +313,7 @@ class PricingModel {
             $prices[] = [
                 'instance_type' => $row['instance_type'],
                 'engine' => $row['engine'],
+                'deployment_type' => $row['deployment_type'] ?? 'single_az',
                 'vcpu' => intval($row['vcpu'] ?? 0),
                 'memory_gb' => floatval($row['memory_gb'] ?? 0),
                 'region' => $row['region'],
@@ -398,18 +396,17 @@ class PricingModel {
     }
     
     // Setter methods for all services
-    public function setRDSInstancePrice($instance_type, $engine, $region, $price, $vcpu = 0, $memory_gb = 0) {
-        $stmt = $this->conn->prepare("INSERT INTO rds_instance_pricing (instance_type, engine, region, vcpu, memory_gb, on_demand_price_per_hour) VALUES (?, ?, ?, ?, ?, ?) 
+    public function setRDSInstancePrice($instance_type, $engine, $region, $price, $vcpu = 0, $memory_gb = 0, $deployment_type = 'single_az') {
+        $stmt = $this->conn->prepare("INSERT INTO rds_instance_pricing (instance_type, engine, region, deployment_type, vcpu, memory_gb, on_demand_price_per_hour) VALUES (?, ?, ?, ?, ?, ?, ?) 
                                       ON DUPLICATE KEY UPDATE vcpu = ?, memory_gb = ?, on_demand_price_per_hour = ?");
-        $stmt->bind_param("sssiddidd", $instance_type, $engine, $region, $vcpu, $memory_gb, $price, $vcpu, $memory_gb, $price);
+        $stmt->bind_param("ssssiddidd", $instance_type, $engine, $region, $deployment_type, $vcpu, $memory_gb, $price, $vcpu, $memory_gb, $price);
         return $stmt->execute();
     }
     
-    public function setRDSStoragePrice($storage_type, $region, $price_per_gb, $iops_price = 0) {
-        $stmt = $this->conn->prepare("INSERT INTO rds_storage_pricing (storage_type, region, price_per_gb_per_month, iops_price_per_iops) 
-                                      VALUES (?, ?, ?, ?) 
-                                      ON DUPLICATE KEY UPDATE price_per_gb_per_month = ?, iops_price_per_iops = ?");
-        $stmt->bind_param("ssdddd", $storage_type, $region, $price_per_gb, $iops_price, $price_per_gb, $iops_price);
+    public function setRDSStoragePrice($storage_type, $region, $price_per_gb) {
+        $stmt = $this->conn->prepare("INSERT INTO rds_storage_pricing (storage_type, region, price_per_gb_per_month) VALUES (?, ?, ?) 
+                                      ON DUPLICATE KEY UPDATE price_per_gb_per_month = ?");
+        $stmt->bind_param("ssdd", $storage_type, $region, $price_per_gb, $price_per_gb);
         return $stmt->execute();
     }
     

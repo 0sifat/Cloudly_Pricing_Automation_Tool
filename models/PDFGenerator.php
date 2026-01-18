@@ -165,19 +165,14 @@ class PDFGenerator {
         $pdf->SetTitle('Cost Estimate & Invoice - ' . $project['project_name']);
         $pdf->SetSubject('AWS Cost Estimate');
         
-        $pdf->SetHeaderData('', 0, 'Cloudly AWS Ask', 'Cost Estimate & Invoice');
-        $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-        $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
+        // Disable header and footer to remove any URLs
+        $pdf->setPrintHeader(false);
+        $pdf->setPrintFooter(false);
         
         $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-        $pdf->SetMargins(15, 20, 15);
-        $pdf->SetHeaderMargin(5);
-        $pdf->SetFooterMargin(0);
+        $pdf->SetMargins(15, 15, 15);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-        
-        // Disable automatic footer to remove URL
-        $pdf->setPrintFooter(false);
         
         $pdf->AddPage();
         
@@ -218,8 +213,14 @@ class PDFGenerator {
                 setTimeout(function() {
                     // Remove any URL from page before printing
                     var style = document.createElement("style");
-                    style.textContent = "@page { margin: 1cm; } @media print { @page { margin: 1cm; } }";
+                    style.textContent = "@page { margin: 1cm; size: A4; marks: none; @top-center { content: \"\"; } @bottom-center { content: \"\"; } @top-right { content: \"\"; } @bottom-right { content: \"\"; } } @media print { @page { margin: 1cm; size: A4; marks: none; } }";
                     document.head.appendChild(style);
+                    // Remove any links that might show URLs
+                    var links = document.querySelectorAll("a");
+                    links.forEach(function(link) {
+                        link.style.textDecoration = "none";
+                        link.style.color = "inherit";
+                    });
                     window.print();
                 }, 500);
             };
@@ -305,20 +306,28 @@ class PDFGenerator {
         <html>
         <head>
             <meta charset="UTF-8">
+            <meta name="robots" content="noindex, nofollow">
             <title>Cost Estimate & Invoice - Cloudly AWS Ask</title>
             <style>
                 @media print {
-                    @page { margin: 1cm; size: A4; }
-                    body { padding: 0; margin: 0; }
-                    .no-print { display: none !important; }
-                    /* Hide any URLs that browsers might add */
                     @page { 
                         margin: 1cm; 
                         size: A4;
                         marks: none;
+                        /* Remove URL from header and footer */
+                        @top-center { content: ""; }
+                        @bottom-center { content: ""; }
+                        @top-right { content: ""; }
+                        @bottom-right { content: ""; }
+                        @top-left { content: ""; }
+                        @bottom-left { content: ""; }
                     }
+                    body { padding: 0; margin: 0; }
+                    .no-print { display: none !important; }
                     /* Remove any URL from print */
                     a[href]:after { content: none !important; }
+                    /* Hide any browser-added URLs */
+                    *::before, *::after { content: none !important; }
                 }
                 body { font-family: 'Segoe UI', Arial, sans-serif; padding: 15px; margin: 0; background: white; }
                 .header { text-align: center; margin-bottom: 20px; border-bottom: 3px solid #ff6b35; padding-bottom: 15px; }
@@ -423,20 +432,48 @@ class PDFGenerator {
                             }
                         }
                         
-                        // Group EBS volumes by EC2 instance
-                        $ebs_by_instance = [];
+                        // Group EBS volumes by EC2 instance ID and server_name
+                        // This ensures EBS volumes with different server_name values are shown separately
+                        $ebs_by_instance_and_name = [];
                         foreach ($ebs_volumes as $vol) {
                             $ec2_id = $vol['ec2_instance_id'] ?? null;
+                            $server_name = $vol['server_name'] ?? '';
                             if ($ec2_id) {
-                                if (!isset($ebs_by_instance[$ec2_id])) {
-                                    $ebs_by_instance[$ec2_id] = [];
+                                // Create composite key: ec2_id + server_name
+                                $key = $ec2_id . '_' . $server_name;
+                                if (!isset($ebs_by_instance_and_name[$key])) {
+                                    $ebs_by_instance_and_name[$key] = [
+                                        'ec2_id' => $ec2_id,
+                                        'server_name' => $server_name,
+                                        'volumes' => []
+                                    ];
                                 }
-                                $ebs_by_instance[$ec2_id][] = $vol;
+                                $ebs_by_instance_and_name[$key]['volumes'][] = $vol;
                                 $ebs_total += $vol['total_cost'];
                             }
                         }
                         
-                        foreach ($ec2_instances as $inst): 
+                        // Create a map of EC2 instances for quick lookup
+                        $ec2_map = [];
+                        foreach ($ec2_instances as $inst) {
+                            $ec2_map[$inst['id']] = $inst;
+                        }
+                        
+                        // Track which EC2 instances have been counted to avoid double-counting
+                        $ec2_counted = [];
+                        
+                        // Process each unique EC2 + server_name combination
+                        foreach ($ebs_by_instance_and_name as $group):
+                            $ec2_id = $group['ec2_id'];
+                            $server_name = $group['server_name'];
+                            $instance_ebs = $group['volumes'];
+                            
+                            // Get EC2 instance details
+                            if (!isset($ec2_map[$ec2_id])) {
+                                continue; // Skip if EC2 instance not found
+                            }
+                            $inst = $ec2_map[$ec2_id];
+                            
                             // Use pre-fetched costs
                             if (isset($ec2_costs[$inst['id']]) && $ec2_costs[$inst['id']] > 0) {
                                 $monthly_total_cost = $ec2_costs[$inst['id']];
@@ -445,39 +482,26 @@ class PDFGenerator {
                                 $monthly_unit_cost = $spec['unit_cost'] ?? 0;
                                 $monthly_total_cost = $monthly_unit_cost * ($spec['quantity'] ?? $inst['quantity']);
                             }
-                            $ec2_total += $monthly_total_cost;
+                            
+                            // Only count EC2 cost once per instance (even if it appears in multiple groups)
+                            if (!isset($ec2_counted[$inst['id']])) {
+                                $ec2_total += $monthly_total_cost;
+                                $ec2_counted[$inst['id']] = true;
+                            }
                             
                             $spec = $ec2_specs[$inst['id']] ?? [];
                             $vcpu = $spec['vcpu'] ?? 0;
                             $memory_gb = $spec['memory_gb'] ?? 0;
                             
-                            // Get associated EBS volumes for this instance
-                            $instance_ebs = $ebs_by_instance[$inst['id']] ?? [];
                             $has_ebs = !empty($instance_ebs);
                             $rowspan = $has_ebs ? count($instance_ebs) + 1 : 1;
+                            
+                            // Determine display name: use server_name if available, otherwise instance type
+                            $display_name = !empty($server_name) ? htmlspecialchars($server_name) : htmlspecialchars($inst['instance_type']);
                         ?>
                         <tr>
                             <td rowspan="<?php echo $rowspan; ?>" style="vertical-align: top; font-weight: 600; font-size: 9px;">
-                                <?php 
-                                // Get server name from EBS volume associated with this specific EC2 instance
-                                // Each EC2 instance should show its own name/purpose separately
-                                $display_name = '';
-                                if ($has_ebs) {
-                                    // Get the server name from the first EBS volume associated with this EC2 instance
-                                    // This ensures each EC2 instance shows with its own purpose/name
-                                    foreach ($instance_ebs as $ebs_vol) {
-                                        if (!empty($ebs_vol['server_name'])) {
-                                            $display_name = htmlspecialchars($ebs_vol['server_name']);
-                                            break; // Use first non-empty server name
-                                        }
-                                    }
-                                }
-                                // If no server name found, use instance type
-                                if (empty($display_name)) {
-                                    $display_name = htmlspecialchars($inst['instance_type']);
-                                }
-                                echo $display_name;
-                                ?>
+                                <?php echo $display_name; ?>
                             </td>
                             <td>EC2</td>
                             <td><?php echo $inst['quantity']; ?></td>
@@ -486,7 +510,7 @@ class PDFGenerator {
                             <td rowspan="<?php echo $rowspan; ?>" style="vertical-align: top;"><?php echo htmlspecialchars($this->formatRegionName($inst['region'])); ?></td>
                         </tr>
                         <?php 
-                        // Show EBS volumes for this instance
+                        // Show EBS volumes for this instance + server_name combination
                         foreach ($instance_ebs as $vol): 
                             $snapshot_display = $vol['snapshot_frequency'] ?? 'none';
                             if ($snapshot_display !== 'none') {
@@ -506,6 +530,49 @@ class PDFGenerator {
                         </tr>
                         <?php endforeach; ?>
                         <?php endforeach; ?>
+                        
+                        <?php 
+                        // Show EC2 instances that don't have any EBS volumes attached
+                        foreach ($ec2_instances as $inst):
+                            $has_ebs_attached = false;
+                            foreach ($ebs_by_instance_and_name as $group) {
+                                if ($group['ec2_id'] == $inst['id']) {
+                                    $has_ebs_attached = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!$has_ebs_attached):
+                                // Use pre-fetched costs
+                                if (isset($ec2_costs[$inst['id']]) && $ec2_costs[$inst['id']] > 0) {
+                                    $monthly_total_cost = $ec2_costs[$inst['id']];
+                                } else {
+                                    $spec = $ec2_specs[$inst['id']] ?? null;
+                                    $monthly_unit_cost = $spec['unit_cost'] ?? 0;
+                                    $monthly_total_cost = $monthly_unit_cost * ($spec['quantity'] ?? $inst['quantity']);
+                                }
+                                $ec2_total += $monthly_total_cost;
+                                
+                                $spec = $ec2_specs[$inst['id']] ?? [];
+                                $vcpu = $spec['vcpu'] ?? 0;
+                                $memory_gb = $spec['memory_gb'] ?? 0;
+                                
+                                $display_name = htmlspecialchars($inst['instance_type']);
+                        ?>
+                        <tr>
+                            <td style="vertical-align: top; font-weight: 600; font-size: 9px;">
+                                <?php echo $display_name; ?>
+                            </td>
+                            <td>EC2</td>
+                            <td><?php echo $inst['quantity']; ?></td>
+                            <td>On Demand <?php echo strtolower($inst['operating_system']); ?> <?php echo htmlspecialchars($inst['instance_type']); ?> Instance (<?php echo $vcpu; ?> vCPU / <?php echo number_format($memory_gb, 0); ?> GB RAM)</td>
+                            <td>$<?php echo number_format($monthly_total_cost, 2); ?></td>
+                            <td><?php echo htmlspecialchars($this->formatRegionName($inst['region'])); ?></td>
+                        </tr>
+                        <?php 
+                            endif;
+                        endforeach; 
+                        ?>
                         <tr style="background: #f0f0f0; font-weight: bold;">
                             <td colspan="4">Total</td>
                             <td>$<?php echo number_format($ec2_total + $ebs_total, 2); ?></td>

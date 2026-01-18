@@ -330,7 +330,7 @@ async function renderEC2Instances() {
                 <div class="pricing-models-grid">
                     <div class="pricing-model-card" style="background: ${inst.pricing_models.find(pm => pm.model === 'compute_savings_plan') ? '#2a4a2a' : '#1a1a1a'}; border: 2px solid ${inst.pricing_models.find(pm => pm.model === 'compute_savings_plan') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}; border-radius: 10px; padding: 20px; cursor: pointer;" onclick="togglePricingModelCard(${inst.id}, 'compute_savings_plan')" onmouseover="this.style.borderColor='rgba(255, 107, 53, 0.6)'" onmouseout="this.style.borderColor='${inst.pricing_models.find(pm => pm.model === 'compute_savings_plan') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}'">
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
-                            <input type="checkbox" ${inst.pricing_models.find(pm => pm.model === 'compute_savings_plan') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'compute_savings_plan', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
+                            <input type="radio" name="pricing_model_${inst.id}" ${inst.pricing_models.find(pm => pm.model === 'compute_savings_plan') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'compute_savings_plan', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
                             <strong style="color: #fff; font-size: 16px; font-weight: 600;">Compute Savings Plans</strong>
                         </div>
                         <p style="color: #ccc; font-size: 14px; margin-bottom: 15px; line-height: 1.6;">One plan that automatically applies to all usage on EC2, Fargate, and Lambda. Up to 66% discount.</p>
@@ -355,7 +355,7 @@ async function renderEC2Instances() {
                     
                     <div class="pricing-model-card" style="background: ${inst.pricing_models.find(pm => pm.model === 'ec2_savings_plan') ? '#2a4a2a' : '#1a1a1a'}; border: 2px solid ${inst.pricing_models.find(pm => pm.model === 'ec2_savings_plan') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}; border-radius: 10px; padding: 20px; cursor: pointer;" onclick="togglePricingModelCard(${inst.id}, 'ec2_savings_plan')" onmouseover="this.style.borderColor='rgba(255, 107, 53, 0.6)'" onmouseout="this.style.borderColor='${inst.pricing_models.find(pm => pm.model === 'ec2_savings_plan') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}'">
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
-                            <input type="checkbox" ${inst.pricing_models.find(pm => pm.model === 'ec2_savings_plan') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'ec2_savings_plan', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
+                            <input type="radio" name="pricing_model_${inst.id}" ${inst.pricing_models.find(pm => pm.model === 'ec2_savings_plan') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'ec2_savings_plan', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
                             <strong style="color: #fff; font-size: 16px; font-weight: 600;">EC2 Instance Savings Plans</strong>
                         </div>
                         <p style="color: #ccc; font-size: 14px; margin-bottom: 15px; line-height: 1.6;">Get deeper discount when you only need one instance family and region. Up to 72% discount.</p>
@@ -380,7 +380,7 @@ async function renderEC2Instances() {
                     
                     <div class="pricing-model-card" style="background: ${inst.pricing_models.find(pm => pm.model === 'on_demand') ? '#2a4a2a' : '#1a1a1a'}; border: 2px solid ${inst.pricing_models.find(pm => pm.model === 'on_demand') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}; border-radius: 10px; padding: 20px; cursor: pointer;" onclick="togglePricingModelCard(${inst.id}, 'on_demand')" onmouseover="this.style.borderColor='rgba(255, 107, 53, 0.6)'" onmouseout="this.style.borderColor='${inst.pricing_models.find(pm => pm.model === 'on_demand') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}'">
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
-                            <input type="checkbox" ${inst.pricing_models.find(pm => pm.model === 'on_demand') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'on_demand', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
+                            <input type="radio" name="pricing_model_${inst.id}" ${inst.pricing_models.find(pm => pm.model === 'on_demand') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'on_demand', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
                             <strong style="color: #fff; font-size: 16px; font-weight: 600;">On-Demand</strong>
                         </div>
                         <p style="color: #ccc; font-size: 14px; margin-bottom: 15px; line-height: 1.6;">Maximize flexibility.</p>
@@ -394,7 +394,7 @@ async function renderEC2Instances() {
                     
                     <div class="pricing-model-card" style="background: ${inst.pricing_models.find(pm => pm.model === 'spot') ? '#2a4a2a' : '#1a1a1a'}; border: 2px solid ${inst.pricing_models.find(pm => pm.model === 'spot') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}; border-radius: 10px; padding: 20px; cursor: pointer;" onclick="togglePricingModelCard(${inst.id}, 'spot')" onmouseover="this.style.borderColor='rgba(255, 107, 53, 0.6)'" onmouseout="this.style.borderColor='${inst.pricing_models.find(pm => pm.model === 'spot') ? '#ff6b35' : 'rgba(255, 107, 53, 0.3)'}'">
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
-                            <input type="checkbox" ${inst.pricing_models.find(pm => pm.model === 'spot') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'spot', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
+                            <input type="radio" name="pricing_model_${inst.id}" ${inst.pricing_models.find(pm => pm.model === 'spot') ? 'checked' : ''} onchange="togglePricingModel(${inst.id}, 'spot', this.checked)" onclick="event.stopPropagation()" style="width: 20px; height: 20px; cursor: pointer;">
                             <strong style="color: #fff; font-size: 16px; font-weight: 600;">Spot Instances</strong>
                         </div>
                         <p style="color: #ccc; font-size: 14px; margin-bottom: 15px; line-height: 1.6;">Minimize cost by leveraging EC2's spare capacity. Recommended for fault tolerant applications.</p>
@@ -490,16 +490,16 @@ async function togglePricingModel(instanceId, model, enabled) {
     if (!instance) return;
 
     if (enabled) {
-        if (!instance.pricing_models.find(pm => pm.model === model)) {
-            const newModel = {
-                model: model,
-                reservation_term: model.includes('savings') ? 3 : 0,
-                payment_option: model.includes('savings') ? 'no_upfront' : '',
-                utilization: model === 'on_demand' ? '100' : '',
-                spot_discount: model === 'spot' ? '70' : ''
-            };
-            instance.pricing_models.push(newModel);
-        }
+        // Clear all other pricing models first (radio button behavior - only one at a time)
+        instance.pricing_models = [];
+        const newModel = {
+            model: model,
+            reservation_term: model.includes('savings') ? 3 : 0,
+            payment_option: model.includes('savings') ? 'no_upfront' : '',
+            utilization: model === 'on_demand' ? '100' : '',
+            spot_discount: model === 'spot' ? '70' : ''
+        };
+        instance.pricing_models.push(newModel);
     } else {
         instance.pricing_models = instance.pricing_models.filter(pm => pm.model !== model);
     }
@@ -1181,8 +1181,11 @@ async function renderRDSInstances() {
                     </select>
                 </div>
                 <div class="form-field">
-                    <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Multi-AZ</label>
-                    <input type="checkbox" ${inst.multi_az ? 'checked' : ''} onchange="updateRDSField(${inst.id}, 'multi_az', this.checked)" style="width: 20px; height: 20px; cursor: pointer;">
+                    <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Deployment</label>
+                    <select onchange="updateRDSField(${inst.id}, 'multi_az', this.value === 'multi_az')" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        <option value="single_az" ${!inst.multi_az ? 'selected' : ''}>Single AZ</option>
+                        <option value="multi_az" ${inst.multi_az ? 'selected' : ''}>Multi-AZ</option>
+                    </select>
                 </div>
                 <div class="form-field">
                     <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Backup Retention (Days)</label>
