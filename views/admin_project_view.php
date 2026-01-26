@@ -58,8 +58,8 @@ $route53Model = new Route53Model();
 
 $ec2_instances = $ec2Model->getInstances($project_id);
 $ebs_volumes = $ebsModel->getVolumes($project_id);
-$vpc_config = $vpcModel->getConfig($project_id);
-$s3_config = $s3Model->getConfig($project_id);
+$vpc_configs = $vpcModel->getAllConfigs($project_id);
+$s3_configs = $s3Model->getAllConfigs($project_id);
 $rds_config = $rdsModel->getConfig($project_id);
 $eks_config = $eksModel->getConfig($project_id);
 $ecr_config = $ecrModel->getConfig($project_id);
@@ -350,56 +350,128 @@ if (!$totals) {
         </div>
         <?php endif; ?>
 
-        <?php if ($vpc_config): ?>
+        <?php if (!empty($vpc_configs) && is_array($vpc_configs)): 
+            $vpc_total = 0;
+            foreach ($vpc_configs as $vpc_config) {
+                $vpc_total += $vpc_config['total_cost'] ?? 0;
+            }
+        ?>
         <div class="service-section">
-            <h3>VPC</h3>
-            <table class="service-table">
+            <h3>VPC Services</h3>
+            <?php foreach ($vpc_configs as $vpc_config): 
+                $service_type = $vpc_config['service_type'] ?? '';
+                $region = $vpc_config['region'] ?? '';
+                $total_cost = $vpc_config['total_cost'] ?? 0;
+                
+                if ($service_type === 'site_to_site_vpn') {
+                    $service_name = 'Site-to-Site VPN';
+                    $vpn_connections = intval($vpc_config['vpn_connections'] ?? 0);
+                    $vpn_duration_unit = $vpc_config['vpn_duration_unit'] ?? 'hours_per_day';
+                    $unit_display = str_replace('_', ' ', $vpn_duration_unit);
+                    $description = $vpn_connections . ' connection(s) - 24 ' . $unit_display;
+                } elseif ($service_type === 'data_transfer') {
+                    $service_name = 'VPC Data Transfer';
+                    $inbound_amount = floatval($vpc_config['inbound_amount'] ?? 0);
+                    $inbound_unit = strtoupper($vpc_config['inbound_unit'] ?? 'GB');
+                    $outbound_amount = floatval($vpc_config['data_transfer_amount'] ?? 0);
+                    $outbound_unit = strtoupper($vpc_config['data_transfer_unit'] ?? 'GB');
+                    $description = 'Inbound: ' . number_format($inbound_amount, 2) . ' ' . $inbound_unit . ' (free) / Outbound: ' . number_format($outbound_amount, 2) . ' ' . $outbound_unit;
+                } elseif ($service_type === 'public_ipv4') {
+                    $service_name = 'Public IPv4 Address';
+                    $in_use_count = intval($vpc_config['in_use_ipv4_count'] ?? 0);
+                    $idle_count = intval($vpc_config['idle_ipv4_count'] ?? 0);
+                    $description = 'In-use: ' . $in_use_count . ' / Idle: ' . $idle_count;
+                } elseif ($service_type === 'nat_gateway') {
+                    $service_name = 'NAT Gateway';
+                    $nat_gateway_count = intval($vpc_config['nat_gateway_count'] ?? 0);
+                    $nat_data_processed = floatval($vpc_config['nat_data_processed'] ?? 0);
+                    $nat_data_unit = strtoupper($vpc_config['nat_data_unit'] ?? 'GB');
+                    $description = $nat_gateway_count . ' gateway(s) - ' . number_format($nat_data_processed, 2) . ' ' . $nat_data_unit . ' processed';
+                } else {
+                    $service_name = 'Unknown VPC Service';
+                    $description = '';
+                }
+            ?>
+            <table class="service-table" style="margin-bottom: 15px;">
+                <tr>
+                    <td><strong>Service:</strong></td>
+                    <td><?php echo htmlspecialchars($service_name); ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Details:</strong></td>
+                    <td><?php echo htmlspecialchars($description); ?></td>
+                </tr>
                 <tr>
                     <td><strong>Region:</strong></td>
-                    <td><?php echo htmlspecialchars($vpc_config['region']); ?></td>
-                    <td><strong>VPC Count:</strong></td>
-                    <td><?php echo $vpc_config['vpc_count']; ?></td>
+                    <td><?php echo htmlspecialchars($region); ?></td>
                 </tr>
                 <tr>
-                    <td><strong>Availability Zones:</strong></td>
-                    <td><?php echo $vpc_config['availability_zones']; ?></td>
-                    <td><strong>NAT Gateways:</strong></td>
-                    <td><?php echo $vpc_config['nat_gateway_count']; ?></td>
+                    <td><strong>Cost:</strong></td>
+                    <td>$<?php echo number_format($total_cost, 2); ?></td>
                 </tr>
-                <tr>
-                    <td><strong>VPC Endpoints:</strong></td>
-                    <td><?php echo $vpc_config['vpc_endpoint_count']; ?></td>
-                    <td><strong>Data Transfer (GB):</strong></td>
-                    <td><?php echo $vpc_config['data_transfer_gb']; ?></td>
-                </tr>
+            </table>
+            <?php endforeach; ?>
+            <table class="service-table">
                 <tr class="subtotal">
-                    <td colspan="3">VPC Subtotal</td>
-                    <td>$<?php echo number_format($vpc_config['total_cost'], 2); ?></td>
+                    <td><strong>VPC Services Subtotal</strong></td>
+                    <td>$<?php echo number_format($vpc_total, 2); ?></td>
                 </tr>
             </table>
         </div>
         <?php endif; ?>
 
-        <?php if ($s3_config): ?>
+        <?php if (!empty($s3_configs) && is_array($s3_configs)): 
+            $s3_total = 0;
+            foreach ($s3_configs as $s3_config) {
+                $s3_total += $s3_config['total_cost'] ?? 0;
+            }
+        ?>
         <div class="service-section">
-            <h3>S3</h3>
+            <h3>S3 Services</h3>
             <table class="service-table">
-                <tr>
-                    <td><strong>Storage Class:</strong></td>
-                    <td><?php echo htmlspecialchars($s3_config['storage_class']); ?></td>
-                    <td><strong>Storage (GB):</strong></td>
-                    <td><?php echo $s3_config['storage_gb']; ?></td>
-                </tr>
-                <tr>
-                    <td><strong>Requests (Million):</strong></td>
-                    <td><?php echo $s3_config['requests_million']; ?></td>
-                    <td><strong>Data Transfer (GB):</strong></td>
-                    <td><?php echo $s3_config['data_transfer_gb']; ?></td>
-                </tr>
-                <tr class="subtotal">
-                    <td colspan="3">S3 Subtotal</td>
-                    <td>$<?php echo number_format($s3_config['total_cost'], 2); ?></td>
-                </tr>
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Description</th>
+                        <th>Cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($s3_configs as $s3_config): 
+                        $service_type = $s3_config['service_type'] ?? '';
+                        $service_name = '';
+                        $description = '';
+                        
+                        if ($service_type === 'standard_storage') {
+                            $service_name = 'S3 Standard Storage';
+                            $amount = floatval($s3_config['storage_amount'] ?? 0);
+                            $unit = strtoupper($s3_config['storage_unit'] ?? 'GB');
+                            $description = number_format($amount, 2) . ' ' . $unit . ' per month';
+                        } elseif ($service_type === 'data_transfer') {
+                            $service_name = 'S3 Data Transfer';
+                            $inbound_amount = floatval($s3_config['inbound_amount'] ?? 0);
+                            $inbound_unit = strtoupper($s3_config['inbound_unit'] ?? 'GB');
+                            $outbound_amount = floatval($s3_config['data_transfer_amount'] ?? 0);
+                            $outbound_unit = strtoupper($s3_config['data_transfer_unit'] ?? 'GB');
+                            $description = 'Inbound: ' . number_format($inbound_amount, 2) . ' ' . $inbound_unit . ' (free) / Outbound: ' . number_format($outbound_amount, 2) . ' ' . $outbound_unit;
+                        } elseif ($service_type === 'glacier') {
+                            $service_name = 'S3 Glacier Deep Archive';
+                            $amount = floatval($s3_config['storage_amount'] ?? 0);
+                            $unit = strtoupper($s3_config['storage_unit'] ?? 'GB');
+                            $description = number_format($amount, 2) . ' ' . $unit . ' per month';
+                        }
+                    ?>
+                    <tr>
+                        <td><strong><?php echo htmlspecialchars($service_name); ?></strong></td>
+                        <td><?php echo htmlspecialchars($description); ?></td>
+                        <td>$<?php echo number_format($s3_config['total_cost'] ?? 0, 2); ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                    <tr class="subtotal">
+                        <td colspan="2"><strong>S3 Subtotal</strong></td>
+                        <td><strong>$<?php echo number_format($s3_total, 2); ?></strong></td>
+                    </tr>
+                </tbody>
             </table>
         </div>
         <?php endif; ?>

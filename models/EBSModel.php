@@ -32,9 +32,18 @@ class EBSModel {
                 $volume['region'] = $project_region;
             }
             
-            // Calculate instance months: 730 hours / 730 hours = 1.00 instance months (monthly calculation)
-            // Since all EC2 costs are already monthly, we use 1.0 for instance_months
-            $volume['ec2_instance_hours'] = 730; // 730 hours = 1 month
+            // Get EC2 instance quantity for this EBS volume
+            $ec2_instance_count = 1; // Default
+            if (!empty($volume['ec2_instance_id'])) {
+                $stmt = $this->conn->prepare("SELECT quantity FROM ec2_instances WHERE id = ?");
+                $stmt->bind_param("i", $volume['ec2_instance_id']);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                if ($row = $result->fetch_assoc()) {
+                    $ec2_instance_count = intval($row['quantity'] ?? 1);
+                }
+            }
+            $volume['ec2_instance_count'] = $ec2_instance_count;
             
             // Calculate costs using the updated calculator
             $costs = $this->calculator->calculateEBSWithSnapshot($volume);

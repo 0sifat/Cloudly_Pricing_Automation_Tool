@@ -185,7 +185,7 @@ async function addEC2Instance() {
         id: Date.now(),
         instance_type: '',
         quantity: 1,
-        operating_system: 'Linux',
+        operating_system: 'linux',
         region: region,
         vcpu: 0,
         memory_gb: 0,
@@ -312,8 +312,9 @@ async function renderEC2Instances() {
                 <div class="form-field">
                     <label>Operating System</label>
                     <select onchange="updateEC2Field(${inst.id}, 'operating_system', this.value)">
-                        <option value="Linux" ${inst.operating_system === 'Linux' ? 'selected' : ''}>Linux</option>
-                        <option value="Windows" ${inst.operating_system === 'Windows' ? 'selected' : ''}>Windows</option>
+                        <option value="linux" ${(inst.operating_system || 'linux').toLowerCase() === 'linux' ? 'selected' : ''}>Linux</option>
+                        <option value="windows" ${(inst.operating_system || '').toLowerCase() === 'windows' ? 'selected' : ''}>Windows</option>
+                        <option value="redhat" ${(inst.operating_system || '').toLowerCase() === 'redhat' ? 'selected' : ''}>Red Hat</option>
                     </select>
                 </div>
                 <div class="form-field">
@@ -834,26 +835,42 @@ function updateEBSSnapshotFrequency(id, frequency) {
     }
 }
 
-function updateEBSField(id, field, value) {
+async function updateEBSField(id, field, value) {
     const volume = ebsVolumes.find(vol => vol.id === id);
     if (volume) {
         volume[field] = value;
-        saveEBSVolumes();
+        // Re-render immediately to show the change
+        renderEBSVolumes();
+        // Save asynchronously without blocking
+        await saveEBSVolumes();
     }
 }
+
+// Track if save is in progress to prevent concurrent saves
+let ebsSaveInProgress = false;
 
 async function saveEBSVolumes() {
     const projectId = document.getElementById('project_id')?.value;
     if (!projectId) return;
 
+    // Prevent concurrent saves
+    if (ebsSaveInProgress) {
+        return;
+    }
+
+    ebsSaveInProgress = true;
+    
     try {
+        // Preserve current volumes array before saving
+        const volumesToSave = [...ebsVolumes];
+        
         const formData = new FormData();
         formData.append('action', 'save_ebs');
         formData.append('project_id', projectId);
         
         // Ensure all volumes have region set
         const projectRegion = getProjectRegion();
-        const volumesWithRegion = ebsVolumes.map(vol => ({
+        const volumesWithRegion = volumesToSave.map(vol => ({
             ...vol,
             region: vol.region || projectRegion
         }));
@@ -867,15 +884,30 @@ async function saveEBSVolumes() {
         
         const result = await response.json();
         if (result.success) {
-            // Reload volumes to get updated costs
-            await loadEBSVolumes();
+            // Reload volumes to get updated costs, but preserve current state if reload fails
+            try {
+                await loadEBSVolumes();
+            } catch (reloadError) {
+                console.error('Error reloading EBS volumes:', reloadError);
+                // Keep current volumes array if reload fails
+                ebsVolumes = volumesToSave;
+                renderEBSVolumes();
+            }
         } else {
             console.error('Error saving EBS volumes:', result.error);
+            // Restore volumes array on error
+            ebsVolumes = volumesToSave;
+            renderEBSVolumes();
             alert('Error saving EBS volumes: ' + (result.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error saving EBS volumes:', error);
+        // Restore volumes array on error
+        ebsVolumes = [...ebsVolumes];
+        renderEBSVolumes();
         alert('Error saving EBS volumes. Please check console for details.');
+    } finally {
+        ebsSaveInProgress = false;
     }
 }
 
@@ -901,63 +933,229 @@ async function loadEBSVolumes() {
 }
 
 // VPC Service
-let vpcConfig = {
-    region: '',
-    vpc_count: 1,
-    availability_zones: 2,
-    nat_gateway_count: 0,
-    vpc_endpoint_count: 0,
-    data_transfer_gb: 0
-};
+let vpcServices = [];
 
 function loadVPCForm(container) {
     container.innerHTML = `
-        <h2>VPC Configuration</h2>
+        <h2>VPC Services</h2>
         <div class="service-form-content">
-            <form id="vpcForm">
-            <div class="form-row">
-                <div class="form-field">
-                    <label>Region</label>
-                    ${getRegionSelectHTML(vpcConfig.region || getProjectRegion(), 'vpc_region')}
-                </div>
-                <div class="form-field">
-                    <label>VPC Count</label>
-                    <input type="number" min="1" id="vpc_count" value="${vpcConfig.vpc_count}" onchange="updateVPCField('vpc_count', parseInt(this.value))">
-                </div>
-                <div class="form-field">
-                    <label>Availability Zones</label>
-                    <input type="number" min="1" max="6" id="vpc_az" value="${vpcConfig.availability_zones}" onchange="updateVPCField('availability_zones', parseInt(this.value))">
-                </div>
+            <p style="color: #ccc; margin-bottom: 20px;">Configure VPC services based on your requirements.</p>
+            <div id="vpcServicesList"></div>
+            <div style="display: flex; gap: 15px; margin-top: 25px; flex-wrap: wrap;">
+                <button class="btn-add" onclick="addVPCService('site_to_site_vpn')">+ Add Site-to-Site VPN</button>
+                <button class="btn-add" onclick="addVPCService('data_transfer')">+ Add Data Transfer</button>
+                <button class="btn-add" onclick="addVPCService('public_ipv4')">+ Add Public IPv4 Address</button>
+                <button class="btn-add" onclick="addVPCService('nat_gateway')">+ Add NAT Gateway</button>
+                <button class="btn-clear" onclick="clearVPCServices()">Clear All</button>
             </div>
-            <div class="form-row">
-                <div class="form-field">
-                    <label>NAT Gateway Count</label>
-                    <input type="number" min="0" id="vpc_nat" value="${vpcConfig.nat_gateway_count}" onchange="updateVPCField('nat_gateway_count', parseInt(this.value))">
-                </div>
-                <div class="form-field">
-                    <label>VPC Endpoint Count</label>
-                    <input type="number" min="0" id="vpc_endpoint" value="${vpcConfig.vpc_endpoint_count}" onchange="updateVPCField('vpc_endpoint_count', parseInt(this.value))">
-                </div>
-                <div class="form-field">
-                    <label>Data Transfer (GB)</label>
-                    <input type="number" min="0" id="vpc_transfer" value="${vpcConfig.data_transfer_gb}" onchange="updateVPCField('data_transfer_gb', parseInt(this.value))">
-                </div>
-            </div>
-            <button type="button" class="btn-success" onclick="saveVPCConfig()">Save VPC Configuration</button>
-            </form>
         </div>
     `;
     loadVPCConfig();
+    renderVPCServices();
 }
 
-function updateVPCField(field, value) {
-    vpcConfig[field] = value;
+function addVPCService(serviceType) {
+    const region = getProjectRegion();
+    if (!region) {
+        alert('Please select a region for the project first.');
+        return;
+    }
+    
+    const service = {
+        id: Date.now() + Math.random(),
+        service_type: serviceType,
+        region: region,
+        // Site-to-Site VPN fields
+        vpn_connections: 0,
+        vpn_duration: 24.00,
+        vpn_duration_unit: 'hours_per_day',
+        // Data Transfer fields
+        inbound_amount: 0,
+        inbound_unit: 'GB',
+        data_transfer_amount: 0,
+        data_transfer_unit: 'GB',
+        // Public IPv4 fields
+        in_use_ipv4_count: 0,
+        idle_ipv4_count: 0,
+        // NAT Gateway fields
+        nat_gateway_count: 0,
+        nat_data_processed: 0,
+        nat_data_unit: 'GB'
+    };
+    
+    vpcServices.push(service);
+    renderVPCServices();
+    saveVPCConfig();
+}
+
+function removeVPCService(id) {
+    vpcServices = vpcServices.filter(svc => svc.id !== id);
+    renderVPCServices();
+    saveVPCConfig();
+}
+
+function clearVPCServices() {
+    if (confirm('Are you sure you want to clear all VPC services?')) {
+        vpcServices = [];
+        renderVPCServices();
+        saveVPCConfig();
+    }
+}
+
+function renderVPCServices() {
+    const container = document.getElementById('vpcServicesList');
+    if (!container) return;
+    
+    if (vpcServices.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: #ccc;"><p style="font-size: 16px; margin-bottom: 10px;">No VPC services added yet.</p><p style="font-size: 14px; color: #999;">Click "Add" buttons above to get started.</p></div>';
+        return;
+    }
+    
+    container.innerHTML = vpcServices.map(svc => {
+        if (svc.service_type === 'site_to_site_vpn') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">Site-to-Site VPN</h4>
+                        <button class="btn-remove" onclick="removeVPCService(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Number of Site-to-Site VPN Connections</label>
+                            <input type="number" min="0" step="1" value="${svc.vpn_connections || 0}" onchange="updateVPCServiceField(${svc.id}, 'vpn_connections', parseInt(this.value))" placeholder="Enter count" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Average duration for each connection</label>
+                            <input type="number" min="0" step="0.01" value="24" disabled style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px; opacity: 0.7;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Unit</label>
+                            <select onchange="updateVPCServiceField(${svc.id}, 'vpn_duration_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                <option value="hours_per_day" ${svc.vpn_duration_unit === 'hours_per_day' ? 'selected' : ''}>Hours per Day</option>
+                                <option value="hours_per_week" ${svc.vpn_duration_unit === 'hours_per_week' ? 'selected' : ''}>Hours per Week</option>
+                                <option value="hours_per_month" ${svc.vpn_duration_unit === 'hours_per_month' ? 'selected' : ''}>Hours per Month</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (svc.service_type === 'data_transfer') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">VPC Data Transfer</h4>
+                        <button class="btn-remove" onclick="removeVPCService(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <h5 style="color: #fff; margin-bottom: 15px;">Inbound Data Transfer</h5>
+                        <p style="color: #ccc; font-size: 14px; margin-bottom: 15px;">Enter the data you expect to transfer into ${getProjectRegionName() || 'your region'}</p>
+                        <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 15px;">
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data transfer from</label>
+                                <select disabled style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px; opacity: 0.7;">
+                                    <option value="internet" selected>Internet (free)</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Enter Amount</label>
+                                <input type="number" min="0" step="0.01" value="${svc.inbound_amount || 0}" onchange="updateVPCServiceField(${svc.id}, 'inbound_amount', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data amount</label>
+                                <select onchange="updateVPCServiceField(${svc.id}, 'inbound_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                    <option value="GB" ${svc.inbound_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                    <option value="TB" ${svc.inbound_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <h5 style="color: #fff; margin-bottom: 15px;">Outbound Data Transfer</h5>
+                        <p style="color: #ccc; font-size: 14px; margin-bottom: 15px;">Enter the data you expect to transfer out of ${getProjectRegionName() || 'your region'}</p>
+                        <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data transfer to</label>
+                                <select disabled style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px; opacity: 0.7;">
+                                    <option value="internet" selected>Internet (0.05 USD - 0.09 USD per GB)</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Enter Amount</label>
+                                <input type="number" min="0" step="0.01" value="${svc.data_transfer_amount || 0}" onchange="updateVPCServiceField(${svc.id}, 'data_transfer_amount', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data amount</label>
+                                <select onchange="updateVPCServiceField(${svc.id}, 'data_transfer_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                    <option value="GB" ${svc.data_transfer_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                    <option value="TB" ${svc.data_transfer_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (svc.service_type === 'public_ipv4') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">Public IPv4 Address</h4>
+                        <button class="btn-remove" onclick="removeVPCService(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Number of In-use public IPv4 addresses</label>
+                            <input type="number" min="0" step="1" value="${svc.in_use_ipv4_count || 0}" onchange="updateVPCServiceField(${svc.id}, 'in_use_ipv4_count', parseInt(this.value))" placeholder="Enter count" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Number of Idle public IPv4 addresses</label>
+                            <input type="number" min="0" step="1" value="${svc.idle_ipv4_count || 0}" onchange="updateVPCServiceField(${svc.id}, 'idle_ipv4_count', parseInt(this.value))" placeholder="Enter count" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (svc.service_type === 'nat_gateway') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">NAT Gateway</h4>
+                        <button class="btn-remove" onclick="removeVPCService(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Number of NAT Gateways</label>
+                            <input type="number" min="0" step="1" value="${svc.nat_gateway_count || 0}" onchange="updateVPCServiceField(${svc.id}, 'nat_gateway_count', parseInt(this.value))" placeholder="Enter count" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data Processed per NAT Gateway</label>
+                            <input type="number" min="0" step="0.01" value="${svc.nat_data_processed || 0}" onchange="updateVPCServiceField(${svc.id}, 'nat_data_processed', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Unit</label>
+                            <select onchange="updateVPCServiceField(${svc.id}, 'nat_data_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                <option value="GB" ${svc.nat_data_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                <option value="TB" ${svc.nat_data_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return '';
+    }).join('');
+}
+
+function updateVPCServiceField(id, field, value) {
+    const service = vpcServices.find(svc => svc.id === id);
+    if (service) {
+        service[field] = value;
+        saveVPCConfig();
+    }
 }
 
 async function saveVPCConfig() {
     const projectId = document.getElementById('project_id')?.value;
     if (!projectId) {
-        alert('Please save your project first!');
+        console.warn('No project ID, skipping VPC save');
         return;
     }
 
@@ -965,7 +1163,7 @@ async function saveVPCConfig() {
         const formData = new FormData();
         formData.append('action', 'save_vpc');
         formData.append('project_id', projectId);
-        formData.append('config', JSON.stringify(vpcConfig));
+        formData.append('config', JSON.stringify(vpcServices));
 
         const response = await fetch('../controllers/service_controller.php', {
             method: 'POST',
@@ -973,14 +1171,11 @@ async function saveVPCConfig() {
         });
 
         const result = await response.json();
-        if (result.success) {
-            alert('VPC configuration saved successfully!');
-        } else {
-            alert('Error: ' + result.error);
+        if (!result.success) {
+            console.error('Error saving VPC config:', result.error);
         }
     } catch (error) {
         console.error('Error saving VPC config:', error);
-        alert('An error occurred. Please try again.');
     }
 }
 
@@ -992,14 +1187,15 @@ async function loadVPCConfig() {
         const response = await fetch(`../controllers/service_controller.php?action=get_vpc&project_id=${projectId}`);
         const result = await response.json();
         if (result.success && result.config) {
-            vpcConfig = result.config;
-            // Update form fields
-            if (document.getElementById('vpc_region')) document.getElementById('vpc_region').value = vpcConfig.region;
-            if (document.getElementById('vpc_count')) document.getElementById('vpc_count').value = vpcConfig.vpc_count;
-            if (document.getElementById('vpc_az')) document.getElementById('vpc_az').value = vpcConfig.availability_zones;
-            if (document.getElementById('vpc_nat')) document.getElementById('vpc_nat').value = vpcConfig.nat_gateway_count;
-            if (document.getElementById('vpc_endpoint')) document.getElementById('vpc_endpoint').value = vpcConfig.vpc_endpoint_count;
-            if (document.getElementById('vpc_transfer')) document.getElementById('vpc_transfer').value = vpcConfig.data_transfer_gb;
+            // Handle both array and single object
+            if (Array.isArray(result.config)) {
+                vpcServices = result.config;
+            } else if (result.config && typeof result.config === 'object') {
+                vpcServices = [result.config];
+            } else {
+                vpcServices = [];
+            }
+            renderVPCServices();
         }
     } catch (error) {
         console.error('Error loading VPC config:', error);
@@ -1061,8 +1257,14 @@ async function addRDSInstance() {
         return;
     }
     
+    // Ensure we're working with the current array
+    if (window.rdsInstances) {
+        rdsInstances = window.rdsInstances;
+    }
+    
+    // Generate unique ID to avoid conflicts
     const instance = {
-        id: Date.now(),
+        id: Date.now() + Math.random(),
         engine: 'mysql',
         instance_type: '',
         quantity: 1,
@@ -1075,11 +1277,17 @@ async function addRDSInstance() {
         memory_gb: 0
     };
     rdsInstances.push(instance);
+    // Always update window reference immediately
     window.rdsInstances = rdsInstances;
     await renderRDSInstances();
+    saveRDSInstances(); // Auto-save to preserve the new instance
 }
 
 async function removeRDSInstance(id) {
+    // Ensure we're working with the current array
+    if (window.rdsInstances) {
+        rdsInstances = window.rdsInstances;
+    }
     rdsInstances = rdsInstances.filter(inst => inst.id !== id);
     window.rdsInstances = rdsInstances;
     await renderRDSInstances();
@@ -1100,6 +1308,12 @@ async function renderRDSInstances() {
         return;
     }
 
+    // Always sync with window.rdsInstances first to get the latest state
+    // This ensures we have the most up-to-date instances including any recent changes
+    if (window.rdsInstances) {
+        rdsInstances = window.rdsInstances;
+    }
+
     if (rdsInstances.length === 0) {
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: #ccc;"><p style="font-size: 16px; margin-bottom: 10px;">No RDS instances added yet.</p><p style="font-size: 14px; color: #999;">Click "Add RDS Instance" to get started.</p></div>';
         return;
@@ -1108,13 +1322,49 @@ async function renderRDSInstances() {
     try {
         const region = getProjectRegion();
         
+        // Always use window.rdsInstances as the source of truth (it has the latest updates)
+        // Create a snapshot for async operations, but we'll sync back after
+        const sourceInstances = window.rdsInstances || rdsInstances;
+        const currentInstances = [...sourceInstances];
+        
         // Fetch instances for all RDS instances first
-        const instancesData = await Promise.all(rdsInstances.map(async (inst) => {
+        const instancesData = await Promise.all(currentInstances.map(async (inst) => {
             const availableInstances = await fetchRDSInstancesByRegion(inst.region || region, inst.engine);
             return { inst, availableInstances };
         }));
         
-        container.innerHTML = instancesData.map(({ inst, availableInstances }) => {
+        // After async operations, always use window.rdsInstances as the source of truth
+        // This ensures that any changes made during async operations are preserved
+        if (window.rdsInstances) {
+            // Use window.rdsInstances directly - it has the most up-to-date data
+            rdsInstances = window.rdsInstances;
+        } else {
+            // No window.rdsInstances, use the snapshot
+            rdsInstances = currentInstances;
+            window.rdsInstances = rdsInstances;
+        }
+        
+        // Ensure instancesData matches the current rdsInstances array
+        // Update instancesData with latest instances from rdsInstances
+        const instancesMap = new Map(rdsInstances.map(inst => [inst.id, inst]));
+        let updatedInstancesData = instancesData.map(({ inst, availableInstances }) => {
+            const latestInst = instancesMap.get(inst.id) || inst;
+            return { inst: latestInst, availableInstances };
+        });
+        
+        // Add any instances from rdsInstances that weren't in the original snapshot
+        const snapshotIds = new Set(instancesData.map(({ inst }) => inst.id));
+        const missingInstances = rdsInstances.filter(inst => !snapshotIds.has(inst.id));
+        if (missingInstances.length > 0) {
+            const missingData = await Promise.all(missingInstances.map(async (missingInst) => {
+                const availableInstances = await fetchRDSInstancesByRegion(missingInst.region || region, missingInst.engine);
+                return { inst: missingInst, availableInstances };
+            }));
+            updatedInstancesData = [...updatedInstancesData, ...missingData];
+        }
+        
+        // Use map with index to ensure proper numbering even if array changes
+        container.innerHTML = updatedInstancesData.map(({ inst, availableInstances }, index) => {
         const instanceOptions = availableInstances
             .filter(opt => opt.engine === inst.engine)
             .map(opt => {
@@ -1127,7 +1377,7 @@ async function renderRDSInstances() {
         return `
         <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
             <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h4 style="color: #fff; margin: 0;">RDS Instance ${rdsInstances.indexOf(inst) + 1}</h4>
+                <h4 style="color: #fff; margin: 0;">RDS Instance ${index + 1}</h4>
                 <button class="btn-remove" onclick="removeRDSInstance(${inst.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
             </div>
             <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 15px;">
@@ -1202,20 +1452,62 @@ async function renderRDSInstances() {
 }
 
 async function updateRDSField(id, field, value) {
-    const instance = rdsInstances.find(inst => inst.id === id);
-    if (instance) {
-        instance[field] = value;
-        if (field === 'engine') {
-            // Clear instance type when engine changes
-            instance.instance_type = '';
-            instance.vcpu = 0;
-            instance.memory_gb = 0;
-            window.rdsInstances = rdsInstances;
-            await renderRDSInstances();
-        }
-        window.rdsInstances = rdsInstances;
-        saveRDSInstances();
+    // Always sync with window.rdsInstances first to get the latest state
+    if (window.rdsInstances) {
+        rdsInstances = window.rdsInstances;
     }
+    
+    const instanceIndex = rdsInstances.findIndex(inst => inst.id === id);
+    if (instanceIndex === -1) {
+        console.error(`RDS instance with id ${id} not found. Current instances:`, rdsInstances.map(inst => ({ id: inst.id, engine: inst.engine })));
+        // Try to restore from window if available
+        if (window.rdsInstances) {
+            const windowInstance = window.rdsInstances.find(inst => inst.id === id);
+            if (windowInstance) {
+                console.log('Restoring instance from window.rdsInstances');
+                rdsInstances.push(windowInstance);
+                window.rdsInstances = rdsInstances;
+            }
+        }
+        return;
+    }
+    
+    // Get the instance by index to ensure we have the right reference
+    const instance = rdsInstances[instanceIndex];
+    
+    // Update the field
+    instance[field] = value;
+    if (field === 'engine') {
+        // Clear instance type when engine changes
+        instance.instance_type = '';
+        instance.vcpu = 0;
+        instance.memory_gb = 0;
+    }
+    
+    // Always update the window reference IMMEDIATELY to ensure consistency
+    // This must happen before any async operations
+    window.rdsInstances = rdsInstances;
+    
+    // Re-render first, then save after rendering completes
+    await renderRDSInstances();
+    
+    // Verify instance still exists after rendering
+    const verifyInstance = rdsInstances.find(inst => inst.id === id);
+    if (!verifyInstance) {
+        console.error(`Instance ${id} was lost after rendering. Restoring...`);
+        // Restore from window if available
+        if (window.rdsInstances) {
+            const windowInstance = window.rdsInstances.find(inst => inst.id === id);
+            if (windowInstance) {
+                rdsInstances.push(windowInstance);
+                window.rdsInstances = rdsInstances;
+                await renderRDSInstances();
+            }
+        }
+    }
+    
+    // Save after rendering is complete to ensure instance is preserved
+    saveRDSInstances();
 }
 
 async function updateRDSEngine(id, engine) {
@@ -1223,6 +1515,10 @@ async function updateRDSEngine(id, engine) {
 }
 
 async function updateRDSInstanceType(id, instanceType, vcpu, memoryGb) {
+    // Ensure we're working with the current array
+    if (window.rdsInstances) {
+        rdsInstances = window.rdsInstances;
+    }
     const instance = rdsInstances.find(inst => inst.id === id);
     if (instance) {
         instance.instance_type = instanceType;
@@ -1235,6 +1531,10 @@ async function updateRDSInstanceType(id, instanceType, vcpu, memoryGb) {
 }
 
 function updateRDSQuantity(id, delta, value) {
+    // Ensure we're working with the current array
+    if (window.rdsInstances) {
+        rdsInstances = window.rdsInstances;
+    }
     const instance = rdsInstances.find(inst => inst.id === id);
     if (instance) {
         if (value !== undefined) {
@@ -1242,6 +1542,7 @@ function updateRDSQuantity(id, delta, value) {
         } else {
             instance.quantity = Math.max(1, instance.quantity + delta);
         }
+        window.rdsInstances = rdsInstances;
         renderRDSInstances();
         saveRDSInstances();
     }
@@ -1254,21 +1555,22 @@ async function saveRDSInstances() {
         return;
     }
 
-    // Validate RDS instances before saving
-    const validInstances = rdsInstances.filter(inst => {
-        return inst.engine && inst.instance_type && inst.region;
-    });
+    // Preserve current instances array before saving
+    const instancesToSave = [...rdsInstances];
     
-    if (validInstances.length === 0 && rdsInstances.length > 0) {
-        console.warn('No valid RDS instances to save');
-        return;
-    }
+    // Ensure all instances have region set
+    const projectRegion = getProjectRegion();
+    const instancesWithRegion = instancesToSave.map(inst => ({
+        ...inst,
+        region: inst.region || projectRegion
+    }));
 
     try {
         const formData = new FormData();
         formData.append('action', 'save_rds');
         formData.append('project_id', projectId);
-        formData.append('config', JSON.stringify(validInstances.length > 0 ? validInstances : rdsInstances));
+        // Save all instances - backend will skip invalid ones
+        formData.append('config', JSON.stringify(instancesWithRegion));
 
         const response = await fetch('../controllers/service_controller.php', {
             method: 'POST',
@@ -1289,7 +1591,9 @@ async function saveRDSInstances() {
         }
         
         if (result.success) {
-            await loadRDSInstances();
+            // Don't reload - keep current array to preserve unsaved instances
+            // Only reload if there was an error or if explicitly needed
+            console.log('RDS instances saved successfully');
         } else {
             alert('Error saving RDS instances: ' + (result.error || 'Unknown error'));
         }
@@ -1301,33 +1605,53 @@ async function saveRDSInstances() {
 
 async function loadRDSInstances() {
     const projectId = document.getElementById('project_id')?.value;
-    if (!projectId) return;
+    if (!projectId) {
+        // If no project ID, keep current instances (might be unsaved)
+        return;
+    }
 
     try {
         const response = await fetch(`../controllers/service_controller.php?action=get_rds&project_id=${projectId}`);
         const result = await response.json();
         if (result.success) {
+            let loadedInstances = [];
             if (result.config) {
                 // Handle both single config (backward compatibility) and array
                 if (Array.isArray(result.config)) {
-                    rdsInstances = result.config.map(inst => ({
+                    loadedInstances = result.config.map(inst => ({
                         ...inst,
                         id: inst.id || Date.now() + Math.random(),
                         multi_az: inst.multi_az == 1 || inst.multi_az === true
                     }));
                 } else {
                     // Single config - convert to array
-                    rdsInstances = [{
+                    loadedInstances = [{
                         ...result.config,
                         id: result.config.id || Date.now(),
                         multi_az: result.config.multi_az == 1 || result.config.multi_az === true
                     }];
                 }
-            } else {
-                rdsInstances = [];
             }
+            
+            // Merge loaded instances with current unsaved instances
+            // Keep unsaved instances (those with timestamp-based IDs > 1 trillion)
+            const currentUnsaved = rdsInstances.filter(inst => {
+                // Timestamp-based IDs are > 1 trillion (Date.now() generates ~13 digit numbers)
+                return inst.id && inst.id > 1000000000000;
+            });
+            
+            // Get IDs of loaded instances to avoid duplicates
+            const loadedIds = new Set(loadedInstances.map(inst => inst.id).filter(id => id && id <= 1000000000000));
+            
+            // Keep unsaved instances that don't match loaded ones
+            const unsavedToKeep = currentUnsaved.filter(inst => {
+                return !loadedIds.has(inst.id);
+            });
+            
+            // Combine: loaded instances + unsaved instances
+            rdsInstances = [...loadedInstances, ...unsavedToKeep];
             window.rdsInstances = rdsInstances;
-            renderRDSInstances();
+            await renderRDSInstances();
         }
     } catch (error) {
         console.error('Error loading RDS instances:', error);
@@ -1336,67 +1660,214 @@ async function loadRDSInstances() {
 
 window.rdsInstances = rdsInstances;
 
-// S3 Service
-let s3Config = {
-    storage_class: 'standard',
-    storage_gb: 100,
-    requests_million: 0,
-    data_transfer_gb: 0
-};
+// S3 Service - supports 3 separate services
+let s3Services = [];
 
 function loadS3Form(container) {
     container.innerHTML = `
-        <h2>S3 Configuration</h2>
+        <h2>S3 Services</h2>
         <div class="service-form-content">
-            <form id="s3Form">
-            <div class="form-row">
-                <div class="form-field">
-                    <label>Storage Class</label>
-                    <select id="s3_storage_class" onchange="updateS3Field('storage_class', this.value)">
-                        <option value="standard">Standard</option>
-                        <option value="intelligent_tiering">Intelligent-Tiering</option>
-                        <option value="standard_ia">Standard-IA</option>
-                        <option value="onezone_ia">One Zone-IA</option>
-                        <option value="glacier">Glacier</option>
-                        <option value="deep_archive">Deep Archive</option>
-                    </select>
-                </div>
-                <div class="form-field">
-                    <label>Storage (GB)</label>
-                    <input type="number" min="1" id="s3_storage" value="${s3Config.storage_gb}" onchange="updateS3Field('storage_gb', parseInt(this.value))">
-                </div>
-                <div class="form-field">
-                    <label>Requests (Million)</label>
-                    <input type="number" min="0" step="0.1" id="s3_requests" value="${s3Config.requests_million}" onchange="updateS3Field('requests_million', parseFloat(this.value))">
-                </div>
-                <div class="form-field">
-                    <label>Data Transfer (GB)</label>
-                    <input type="number" min="0" id="s3_transfer" value="${s3Config.data_transfer_gb}" onchange="updateS3Field('data_transfer_gb', parseInt(this.value))">
-                </div>
+            <p style="color: #ccc; margin-bottom: 20px;">The calculations below exclude Free Tier discounts.</p>
+            <div id="s3ServicesList"></div>
+            <div style="display: flex; gap: 15px; margin-top: 25px;">
+                <button class="btn-add" onclick="addS3Service('standard_storage')">+ Add S3 Standard Storage</button>
+                <button class="btn-add" onclick="addS3Service('data_transfer')">+ Add Data Transfer</button>
+                <button class="btn-add" onclick="addS3Service('glacier')">+ Add S3 Glacier Deep Archive</button>
+                <button class="btn-clear" onclick="clearS3Services()">Clear All</button>
             </div>
-            <button type="button" class="btn-success" onclick="saveS3Config()">Save S3 Configuration</button>
-            </form>
         </div>
     `;
     loadS3Config();
+    renderS3Services();
 }
 
-function updateS3Field(field, value) {
-    s3Config[field] = value;
+function addS3Service(serviceType) {
+    const region = getProjectRegion();
+    if (!region) {
+        alert('Please select a region for the project first.');
+        return;
+    }
+    
+    const service = {
+        id: Date.now() + Math.random(),
+        service_type: serviceType,
+        storage_amount: 0,
+        storage_unit: 'GB',
+        data_transfer_amount: 0,
+        data_transfer_unit: 'GB',
+        inbound_amount: 0,
+        inbound_unit: 'GB',
+        region: region
+    };
+    
+    s3Services.push(service);
+    renderS3Services();
+    saveS3Config();
+}
+
+function removeS3Service(id) {
+    s3Services = s3Services.filter(svc => svc.id !== id);
+    renderS3Services();
+    saveS3Config();
+}
+
+function clearS3Services() {
+    if (confirm('Are you sure you want to clear all S3 services?')) {
+        s3Services = [];
+        renderS3Services();
+        saveS3Config();
+    }
+}
+
+function renderS3Services() {
+    const container = document.getElementById('s3ServicesList');
+    if (!container) return;
+    
+    if (s3Services.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: #ccc;"><p style="font-size: 16px; margin-bottom: 10px;">No S3 services added yet.</p><p style="font-size: 14px; color: #999;">Click "Add" buttons above to get started.</p></div>';
+        return;
+    }
+    
+    container.innerHTML = s3Services.map(svc => {
+        if (svc.service_type === 'standard_storage') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">S3 Standard Storage</h4>
+                        <button class="btn-remove" onclick="removeS3Service(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">S3 Standard storage</label>
+                            <input type="number" min="0" step="0.01" value="${svc.storage_amount || 0}" onchange="updateS3ServiceField(${svc.id}, 'storage_amount', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Unit</label>
+                            <select onchange="updateS3ServiceField(${svc.id}, 'storage_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                <option value="GB" ${svc.storage_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                <option value="TB" ${svc.storage_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (svc.service_type === 'data_transfer') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">Data Transfer</h4>
+                        <button class="btn-remove" onclick="removeS3Service(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <h5 style="color: #fff; margin-bottom: 15px;">Inbound Data Transfer</h5>
+                        <p style="color: #ccc; font-size: 14px; margin-bottom: 15px;">Enter the data you expect to transfer into ${getProjectRegionName() || 'your region'}</p>
+                        <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 15px;">
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data transfer from</label>
+                                <select disabled style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px; opacity: 0.7;">
+                                    <option value="internet" selected>Internet (free)</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Enter Amount</label>
+                                <input type="number" min="0" step="0.01" value="${svc.inbound_amount || 0}" onchange="updateS3ServiceField(${svc.id}, 'inbound_amount', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data amount</label>
+                                <select onchange="updateS3ServiceField(${svc.id}, 'inbound_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                    <option value="GB" ${svc.inbound_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                    <option value="TB" ${svc.inbound_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <h5 style="color: #fff; margin-bottom: 15px;">Outbound Data Transfer</h5>
+                        <p style="color: #ccc; font-size: 14px; margin-bottom: 15px;">Enter the data you expect to transfer out of ${getProjectRegionName() || 'your region'}</p>
+                        <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data transfer to</label>
+                                <select disabled style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px; opacity: 0.7;">
+                                    <option value="internet" selected>Internet (0.05 USD - 0.09 USD per GB)</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Enter Amount</label>
+                                <input type="number" min="0" step="0.01" value="${svc.data_transfer_amount || 0}" onchange="updateS3ServiceField(${svc.id}, 'data_transfer_amount', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                            </div>
+                            <div class="form-field">
+                                <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Data amount</label>
+                                <select onchange="updateS3ServiceField(${svc.id}, 'data_transfer_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                    <option value="GB" ${svc.data_transfer_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                    <option value="TB" ${svc.data_transfer_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (svc.service_type === 'glacier') {
+            return `
+                <div class="instance-item" style="background: #1a1a1a; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+                    <div class="instance-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h4 style="color: #fff; margin: 0;">S3 Glacier Deep Archive</h4>
+                        <button class="btn-remove" onclick="removeS3Service(${svc.id})" style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">Remove</button>
+                    </div>
+                    <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">S3 Glacier Deep Archive storage</label>
+                            <input type="number" min="0" step="0.01" value="${svc.storage_amount || 0}" onchange="updateS3ServiceField(${svc.id}, 'storage_amount', parseFloat(this.value))" placeholder="Enter amount" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                        </div>
+                        <div class="form-field">
+                            <label style="color: #fff; display: block; margin-bottom: 8px; font-weight: 600;">Unit</label>
+                            <select onchange="updateS3ServiceField(${svc.id}, 'storage_unit', this.value)" style="width: 100%; padding: 12px; background: #2a2a2a; color: #fff; border: 2px solid rgba(255, 107, 53, 0.3); border-radius: 8px;">
+                                <option value="GB" ${svc.storage_unit === 'GB' ? 'selected' : ''}>GB per month</option>
+                                <option value="TB" ${svc.storage_unit === 'TB' ? 'selected' : ''}>TB per month</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return '';
+    }).join('');
+}
+
+function updateS3ServiceField(id, field, value) {
+    const service = s3Services.find(svc => svc.id === id);
+    if (service) {
+        service[field] = value;
+        saveS3Config();
+    }
+}
+
+function getProjectRegionName() {
+    const regionSelect = document.querySelector('select[name="region"]');
+    if (regionSelect) {
+        return regionSelect.options[regionSelect.selectedIndex].text;
+    }
+    return '';
 }
 
 async function saveS3Config() {
     const projectId = document.getElementById('project_id')?.value;
     if (!projectId) {
-        alert('Please save your project first!');
+        console.warn('No project ID, skipping S3 save');
         return;
     }
+
+    // Ensure all services have region set
+    const projectRegion = getProjectRegion();
+    const servicesWithRegion = s3Services.map(svc => ({
+        ...svc,
+        region: svc.region || projectRegion
+    }));
 
     try {
         const formData = new FormData();
         formData.append('action', 'save_s3');
         formData.append('project_id', projectId);
-        formData.append('config', JSON.stringify(s3Config));
+        formData.append('config', JSON.stringify(servicesWithRegion));
 
         const response = await fetch('../controllers/service_controller.php', {
             method: 'POST',
@@ -1405,9 +1876,9 @@ async function saveS3Config() {
 
         const result = await response.json();
         if (result.success) {
-            alert('S3 configuration saved successfully!');
+            console.log('S3 services saved successfully');
         } else {
-            alert('Error: ' + result.error);
+            alert('Error saving S3 services: ' + (result.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error saving S3 config:', error);
@@ -1422,12 +1893,25 @@ async function loadS3Config() {
     try {
         const response = await fetch(`../controllers/service_controller.php?action=get_s3&project_id=${projectId}`);
         const result = await response.json();
-        if (result.success && result.config) {
-            s3Config = result.config;
-            if (document.getElementById('s3_storage_class')) document.getElementById('s3_storage_class').value = s3Config.storage_class;
-            if (document.getElementById('s3_storage')) document.getElementById('s3_storage').value = s3Config.storage_gb;
-            if (document.getElementById('s3_requests')) document.getElementById('s3_requests').value = s3Config.requests_million;
-            if (document.getElementById('s3_transfer')) document.getElementById('s3_transfer').value = s3Config.data_transfer_gb;
+        if (result.success) {
+            if (result.config) {
+                // Handle both array and single config (backward compatibility)
+                if (Array.isArray(result.config)) {
+                    s3Services = result.config.map(svc => ({
+                        ...svc,
+                        id: svc.id || Date.now() + Math.random()
+                    }));
+                } else {
+                    // Single config - convert to array (backward compatibility)
+                    s3Services = [{
+                        ...result.config,
+                        id: result.config.id || Date.now()
+                    }];
+                }
+            } else {
+                s3Services = [];
+            }
+            renderS3Services();
         }
     } catch (error) {
         console.error('Error loading S3 config:', error);
@@ -1852,4 +2336,3 @@ async function loadRoute53Config() {
         console.error('Error loading Route53 config:', error);
     }
 }
-

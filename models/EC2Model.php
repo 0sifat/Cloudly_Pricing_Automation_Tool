@@ -46,9 +46,13 @@ class EC2Model {
                 $total_cost = $unit_cost_monthly * $quantity;
                 // Parameters: project_id(i), instance_type(s), quantity(i), operating_system(s), region(s), vcpu(i), memory_gb(d), unit_cost_monthly(d), total_cost(d)
                 // Type string: "isissiddd" = 9 characters (i-s-i-s-s-i-d-d-d)
-                // Verify all variables are set
+                // Verify all variables are set and normalize OS
                 $instance_type = $instance['instance_type'] ?? '';
-                $operating_system = $instance['operating_system'] ?? '';
+                $operating_system = strtolower($instance['operating_system'] ?? 'linux');
+                // Normalize OS values
+                if ($operating_system === 'red hat') {
+                    $operating_system = 'redhat';
+                }
                 $region = $instance['region'] ?? '';
                 // Construct type string explicitly to ensure 9 characters
                 // Parameters: project_id(i), instance_type(s), quantity(i), operating_system(s), region(s), vcpu(i), memory_gb(d), unit_cost_monthly(d), total_cost(d)
@@ -147,10 +151,15 @@ class EC2Model {
         require_once __DIR__ . '/PricingModel.php';
         $pricingModel = new PricingModel();
         $region = $instance['region'] ?? '';
+        $os = strtolower($instance['operating_system'] ?? 'linux');
+        // Normalize OS values: Linux -> linux, Windows -> windows, Red Hat/RedHat -> redhat
+        if ($os === 'red hat') {
+            $os = 'redhat';
+        }
         if (empty($region)) {
             return 0.01; // Fallback if no region
         }
-        return $pricingModel->getEC2Price($instance['instance_type'], $region);
+        return $pricingModel->getEC2Price($instance['instance_type'], $region, $os);
     }
     
     private function calculatePricingModelCost($instance, $pm) {

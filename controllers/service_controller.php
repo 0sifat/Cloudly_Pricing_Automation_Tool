@@ -246,13 +246,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
         case 'get_vpc':
             $model = new VPCModel();
-            $config = $model->getConfig($project_id);
+            $config = $model->getAllConfigs($project_id);
             echo json_encode(['success' => true, 'config' => $config]);
             break;
             
         case 'get_s3':
             $model = new S3Model();
-            $config = $model->getConfig($project_id);
+            $config = $model->getAllConfigs($project_id);
             echo json_encode(['success' => true, 'config' => $config]);
             break;
             

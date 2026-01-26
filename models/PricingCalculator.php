@@ -13,38 +13,178 @@ class PricingCalculator {
     }
     
     // VPC Pricing
+    // VPC Pricing - handles 4 separate services: site_to_site_vpn, data_transfer, public_ipv4, nat_gateway
     public function calculateVPC($config) {
         $cost = 0;
         $region = $config['region'] ?? '';
         if (empty($region)) return 0;
         
-        // NAT Gateway pricing
-        $nat_price = $this->pricingModel->getVPCPrice('nat_gateway', $region);
-        $cost += $config['nat_gateway_count'] * $nat_price['price_per_hour'] * 730;
+        $service_type = $config['service_type'] ?? '';
         
-        // VPC Endpoint pricing
-        $endpoint_price = $this->pricingModel->getVPCPrice('vpc_endpoint', $region);
-        $cost += $config['vpc_endpoint_count'] * $endpoint_price['price_per_hour'] * 730;
-        
-        // Data transfer pricing
-        $data_transfer_price = $this->pricingModel->getVPCPrice('data_transfer', $region);
-        $cost += $config['data_transfer_gb'] * $data_transfer_price['price_per_gb'];
+        switch ($service_type) {
+            case 'site_to_site_vpn':
+                // Site-to-Site VPN - per connection per unit
+                $vpn_connections = intval($config['vpn_connections'] ?? 0);
+                $vpn_duration = floatval($config['vpn_duration'] ?? 24.00); // Fixed at 24
+                $vpn_duration_unit = $config['vpn_duration_unit'] ?? 'hours_per_day';
+                
+                $vpn_price = $this->pricingModel->getVPCSiteToSiteVPNPrice($region, $vpn_duration_unit);
+                $price_per_connection_per_unit = $vpn_price['price_per_connection_per_unit'];
+                
+                // Calculate based on unit
+                if ($vpn_duration_unit === 'hours_per_day') {
+                    // Price per connection per day * 30 days
+                    $cost = $vpn_connections * $price_per_connection_per_unit * 30;
+                } elseif ($vpn_duration_unit === 'hours_per_week') {
+                    // Price per connection per week * 4.33 weeks
+                    $cost = $vpn_connections * $price_per_connection_per_unit * 4.33;
+                } elseif ($vpn_duration_unit === 'hours_per_month') {
+                    // Price per connection per month
+                    $cost = $vpn_connections * $price_per_connection_per_unit;
+                }
+                break;
+                
+            case 'data_transfer':
+                // Data Transfer - Inbound is free (0.00), Outbound has fixed pricing
+                $inbound_amount = floatval($config['inbound_amount'] ?? 0);
+                $inbound_unit = strtoupper($config['inbound_unit'] ?? 'GB');
+                $outbound_amount = floatval($config['data_transfer_amount'] ?? 0);
+                $outbound_unit = strtoupper($config['data_transfer_unit'] ?? 'GB');
+                
+                // Inbound is always free
+                $inbound_cost = 0.00;
+                
+                // Convert outbound to GB if TB
+                if ($outbound_unit === 'TB') {
+                    $outbound_amount_gb = $outbound_amount * 1024;
+                } else {
+                    $outbound_amount_gb = $outbound_amount;
+                }
+                
+                // Outbound pricing
+                $outbound_price = $this->pricingModel->getVPCDataTransferPrice($region);
+                $outbound_cost = $outbound_amount_gb * $outbound_price['price_per_gb'];
+                
+                $cost = $inbound_cost + $outbound_cost;
+                break;
+                
+            case 'public_ipv4':
+                // Public IPv4 Address - separate pricing for in-use and idle
+                $in_use_count = intval($config['in_use_ipv4_count'] ?? 0);
+                $idle_count = intval($config['idle_ipv4_count'] ?? 0);
+                
+                $ipv4_price = $this->pricingModel->getVPCPublicIPv4Price($region);
+                $price_per_in_use_per_hour = $ipv4_price['price_per_in_use_per_hour'];
+                $price_per_idle_per_hour = $ipv4_price['price_per_idle_per_hour'];
+                
+                // Calculate monthly cost (730 hours per month)
+                $in_use_cost = $in_use_count * $price_per_in_use_per_hour * 730;
+                $idle_cost = $idle_count * $price_per_idle_per_hour * 730;
+                
+                $cost = $in_use_cost + $idle_cost;
+                break;
+                
+            case 'nat_gateway':
+                // NAT Gateway - per gateway per hour + per GB processed
+                $nat_gateway_count = intval($config['nat_gateway_count'] ?? 0);
+                $nat_data_processed = floatval($config['nat_data_processed'] ?? 0);
+                $nat_data_unit = strtoupper($config['nat_data_unit'] ?? 'GB');
+                
+                // Convert to GB if TB
+                if ($nat_data_unit === 'TB') {
+                    $nat_data_processed_gb = $nat_data_processed * 1024;
+                } else {
+                    $nat_data_processed_gb = $nat_data_processed;
+                }
+                
+                $nat_price = $this->pricingModel->getVPCNATGatewayPrice($region);
+                $price_per_gateway_per_hour = $nat_price['price_per_gateway_per_hour'];
+                $price_per_gb = $nat_price['price_per_gb'];
+                
+                // Gateway hourly cost (730 hours per month) + data processing cost
+                $gateway_cost = $nat_gateway_count * $price_per_gateway_per_hour * 730;
+                $data_cost = $nat_data_processed_gb * $price_per_gb;
+                
+                $cost = $gateway_cost + $data_cost;
+                break;
+                
+            default:
+                $cost = 0;
+                break;
+        }
         
         return $cost;
     }
     
-    // S3 Pricing
+    // S3 Pricing - handles 3 separate services: standard_storage, data_transfer, glacier
     public function calculateS3($config) {
         $cost = 0;
         $region = $config['region'] ?? '';
         if (empty($region)) return 0;
-        $storage_class = $config['storage_class'] ?? 'standard';
         
-        $s3_price = $this->pricingModel->getS3Price($storage_class, $region);
+        $service_type = $config['service_type'] ?? '';
         
-        $cost += $config['storage_gb'] * $s3_price['price_per_gb'];
-        $cost += $config['requests_million'] * $s3_price['request_price'];
-        $cost += $config['data_transfer_gb'] * $s3_price['data_transfer_price'];
+        switch ($service_type) {
+            case 'standard_storage':
+                // S3 Standard Storage - monthly calculation
+                $storage_amount = floatval($config['storage_amount'] ?? 0);
+                $storage_unit = strtoupper($config['storage_unit'] ?? 'GB');
+                
+                // Convert to GB if TB
+                if ($storage_unit === 'TB') {
+                    $storage_amount_gb = $storage_amount * 1024;
+                } else {
+                    $storage_amount_gb = $storage_amount;
+                }
+                
+                $price = $this->pricingModel->getS3StandardStoragePrice($region);
+                $cost = $storage_amount_gb * $price['price_per_gb_per_month'];
+                break;
+                
+            case 'data_transfer':
+                // Data Transfer - Inbound is free (0.00), Outbound has fixed pricing
+                $inbound_amount = floatval($config['inbound_amount'] ?? 0);
+                $inbound_unit = strtoupper($config['inbound_unit'] ?? 'GB');
+                $outbound_amount = floatval($config['data_transfer_amount'] ?? 0);
+                $outbound_unit = strtoupper($config['data_transfer_unit'] ?? 'GB');
+                
+                // Inbound is always free
+                $inbound_cost = 0.00;
+                
+                // Convert outbound to GB if TB
+                if ($outbound_unit === 'TB') {
+                    $outbound_amount_gb = $outbound_amount * 1024;
+                } else {
+                    $outbound_amount_gb = $outbound_amount;
+                }
+                
+                // Outbound pricing (fixed 0.05-0.09 per GB)
+                $outbound_price = $this->pricingModel->getS3DataTransferPrice($region);
+                $outbound_cost = $outbound_amount_gb * $outbound_price['price_per_gb'];
+                
+                $cost = $inbound_cost + $outbound_cost;
+                break;
+                
+            case 'glacier':
+                // S3 Glacier Deep Archive - monthly calculation
+                $storage_amount = floatval($config['storage_amount'] ?? 0);
+                $storage_unit = strtoupper($config['storage_unit'] ?? 'GB');
+                
+                // Convert to GB if TB
+                if ($storage_unit === 'TB') {
+                    $storage_amount_gb = $storage_amount * 1024;
+                } else {
+                    $storage_amount_gb = $storage_amount;
+                }
+                
+                $price = $this->pricingModel->getS3GlacierPrice($region);
+                $cost = $storage_amount_gb * $price['price_per_gb_per_month'];
+                break;
+                
+            default:
+                $cost = 0;
+                break;
+        }
         
         return $cost;
     }
@@ -157,7 +297,7 @@ class PricingCalculator {
         return $result['total_cost'];
     }
     
-    // EBS Pricing with snapshot breakdown (AWS method)
+    // EBS Pricing with snapshot breakdown (hardcoded snapshot price: 0.05 per GB/month)
     public function calculateEBSWithSnapshot($config) {
         $storage_cost = 0;
         $snapshot_cost = 0;
@@ -168,19 +308,17 @@ class PricingCalculator {
         }
         
         $ebs_price = $this->pricingModel->getEBSPrice($config['volume_type'], $region);
+        $size_gb = intval($config['size_gb'] ?? 0);
+        $instance_count = intval($config['ec2_instance_count'] ?? 1); // Number of EC2 instances using this EBS
         
-        // Calculate instance months: EC2 hours / 730 hours in a month
-        $ec2_instance_hours = floatval($config['ec2_instance_hours'] ?? 730);
-        $instance_months = $ec2_instance_hours / 730.0;
-        
-        // Storage cost: size_gb × price_per_gb_per_month × instance_months
-        $storage_cost_per_month = $config['size_gb'] * $ebs_price['price_per_gb'];
+        // EBS Storage Cost = EBS Volume Size in GB × EBS Price per GB per Month × Instance count
+        $storage_cost_per_month = $size_gb * $ebs_price['price_per_gb'] * $instance_count;
         
         // IOPS cost for io1/io2 volumes (per month)
         if ($config['volume_type'] == 'io1' || $config['volume_type'] == 'io2') {
             $iops = intval($config['iops'] ?? 3000);
             if ($iops > 3000) {
-                $storage_cost_per_month += ($iops - 3000) * $ebs_price['iops_price'] / 1000;
+                $storage_cost_per_month += ($iops - 3000) * $ebs_price['iops_price'] / 1000 * $instance_count;
             }
         }
         
@@ -189,85 +327,43 @@ class PricingCalculator {
             $iops = intval($config['iops'] ?? 3000);
             $throughput = intval($config['throughput'] ?? 125);
             
-            // gp3 baseline is 3000 IOPS and 125 MB/s
             if ($iops > 3000) {
-                $storage_cost_per_month += ($iops - 3000) * $ebs_price['iops_price'];
+                $storage_cost_per_month += ($iops - 3000) * $ebs_price['iops_price'] * $instance_count;
             }
             if ($throughput > 125) {
-                $storage_cost_per_month += ($throughput - 125) * $ebs_price['throughput_price'];
+                $storage_cost_per_month += ($throughput - 125) * $ebs_price['throughput_price'] * $instance_count;
             }
         }
         
-        // Apply instance months to storage cost
-        $storage_cost = $storage_cost_per_month * $instance_months;
+        $storage_cost = $storage_cost_per_month; // Already monthly
         
-        // Snapshot cost calculation (AWS method)
+        // Snapshot cost calculation (hardcoded price: 0.05 per GB/month)
         $snapshot_frequency = $config['snapshot_frequency'] ?? 'none';
         $snapshot_storage_gb = intval($config['snapshot_storage_gb'] ?? 0);
-        $size_gb = intval($config['size_gb'] ?? 0);
+        $snapshot_price_per_gb = 0.05; // Hardcoded
         
-        if ($snapshot_frequency !== 'none' && $snapshot_storage_gb > 0) {
-            $snapshot_price_per_gb = 0;
+        // Fixed snapshot counts per month
+        $snapshot_counts = [
+            'hourly' => 729,
+            'daily' => 30,
+            '2x_daily' => 59.83,
+            '3x_daily' => 90.25,
+            '4x_daily' => 120.67,
+            '6x_daily' => 120.67,
+            'weekly' => 3,
+            'monthly' => 1
+        ];
+        
+        if ($snapshot_frequency !== 'none' && $snapshot_storage_gb > 0 && isset($snapshot_counts[$snapshot_frequency])) {
+            $total_snapshots = $snapshot_counts[$snapshot_frequency];
             
-            // Get snapshot price based on frequency
-            switch ($snapshot_frequency) {
-                case 'hourly':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_hourly'];
-                    $snapshots_per_month = 730; // 24 hours × 30.4 days
-                    break;
-                case 'daily':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_daily'];
-                    $snapshots_per_month = 30; // ~30 days per month
-                    break;
-                case '2x_daily':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_2x_daily'];
-                    $snapshots_per_month = 60; // 2 × 30
-                    break;
-                case '3x_daily':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_3x_daily'];
-                    $snapshots_per_month = 90; // 3 × 30
-                    break;
-                case '4x_daily':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_4x_daily'];
-                    $snapshots_per_month = 120; // 4 × 30
-                    break;
-                case '6x_daily':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_6x_daily'];
-                    $snapshots_per_month = 180; // 6 × 30
-                    break;
-                case 'weekly':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_weekly'];
-                    $snapshots_per_month = 4; // ~4 weeks per month
-                    break;
-                case 'monthly':
-                    $snapshot_price_per_gb = $ebs_price['snapshot_monthly'];
-                    $snapshots_per_month = 1; // 1 per month
-                    break;
-                default:
-                    $snapshot_price_per_gb = 0;
-                    $snapshots_per_month = 0;
-            }
+            // Total EBS Snapshot Cost = (EBS Volume Size in GB × 0.05) + 
+            //                          (Total Number of Snapshots × Changed Data Size per Snapshot in GB × 0.05 × 50%) × Instance Count
+            $initial_snapshot_cost = $size_gb * $snapshot_price_per_gb;
+            $incremental_snapshot_cost = $total_snapshots * $snapshot_storage_gb * $snapshot_price_per_gb * 0.5; // 50% partial month factor
+            $snapshot_cost_per_month = ($initial_snapshot_cost + $incremental_snapshot_cost) * $instance_count;
             
-            if ($snapshot_price_per_gb > 0 && $snapshots_per_month > 0) {
-                // AWS Snapshot Cost Calculation Method:
-                // 1. Initial snapshot cost = size_gb × snapshot_price_per_gb
-                $initial_snapshot_cost = $size_gb * $snapshot_price_per_gb;
-                
-                // 2. Monthly cost of each snapshot = snapshot_storage_gb × snapshot_price_per_gb
-                $monthly_snapshot_cost = $snapshot_storage_gb * $snapshot_price_per_gb;
-                
-                // 3. Discount for partial storage month = monthly_cost × 50%
-                $discounted_monthly_cost = $monthly_snapshot_cost * 0.5;
-                
-                // 4. Incremental snapshot cost = discounted_cost × number_of_snapshots
-                $incremental_snapshot_cost = $discounted_monthly_cost * $snapshots_per_month;
-                
-                // 5. Total snapshot cost = initial + incremental
-                $total_snapshot_cost_per_month = $initial_snapshot_cost + $incremental_snapshot_cost;
-                
-                // 6. Apply instance months
-                $snapshot_cost = $total_snapshot_cost_per_month * $instance_months;
-            }
+            $snapshot_cost = $snapshot_cost_per_month; // Already monthly
         }
         
         $total_cost = $storage_cost + $snapshot_cost;
